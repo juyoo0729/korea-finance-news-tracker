@@ -157,7 +157,7 @@ python news_tracker.py --keyword 반도체 --summarize
 
 ## 📄 라이선스
 
-MIT License
+개인 학습/포트폴리오 용도로 제작됨
 
 ## 🙋 만든 사람
 
