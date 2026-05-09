@@ -74,6 +74,7 @@ korea-finance-news-tracker/
 │
 ├── requirements.txt
 └── README.md
+...
 ## 🚀 시작하기
 
 ### 1. 저장소 복제
