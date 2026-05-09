@@ -1,0 +1,8 @@
+beautifulsoup4
+feedparser==6.0.12
+ollama
+pyyaml
+requests
+rich
+streamlit
+streamlit-autorefresh

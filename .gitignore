@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+.claude/
+news_*.md
+classification_cache.json
+*.log
