@@ -6,18 +6,19 @@ dashboard.py — 한경 금융 뉴스 Streamlit 대시보드
 """
 
 import atexit
-from pathlib import Path
+# from pathlib import Path  # watchlist yaml 경로 불필요
 
 import streamlit as st
-import yaml
+# import yaml  # watchlist_stocks.yaml 로딩 비활성화
 
 from classifier import HybridClassifier
 from hankyung_feed import fetch_hankyung_finance
+from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
-from price_fetcher import fetch_price
+# from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "exaone3.5:2.4b"
-COLS_PER_ROW = 4
+# COLS_PER_ROW = 4  # 관심종목 카드 레이아웃 비활성화
 
 SUMMARY_PROMPT = """\
 [지시사항]
@@ -57,19 +58,11 @@ def _deduplicate(articles: list[dict]) -> list[dict]:
 
 # ── 데이터 함수 ───────────────────────────────────────────────
 
-@st.cache_data(show_spinner=False)
-def load_watchlist() -> dict[str, str]:
-    yaml_path = Path(__file__).parent / "watchlist_stocks.yaml"
-    with open(yaml_path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    # YAML이 숫자 키를 int로 파싱할 경우 대비해 str로 변환
-    return {str(k).zfill(6): v for k, v in raw.items()}
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def fetch_all_prices(tickers: tuple[str, ...]) -> dict[str, dict | None]:
-    return {ticker: fetch_price(ticker) for ticker in tickers}
-
+# load_watchlist / fetch_all_prices — 관심종목 기능 비활성화
+# @st.cache_data(show_spinner=False)
+# def load_watchlist() -> dict[str, str]: ...
+# @st.cache_data(ttl=60, show_spinner=False)
+# def fetch_all_prices(tickers): ...
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_articles(max_items: int = 50, source: str = "한경 RSS", ticker: str = "") -> list[dict]:
@@ -106,8 +99,8 @@ def sector_tag_html(sector: str) -> str:
 # ── 페이지 설정 ───────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="한경 금융 뉴스 대시보드",
-    page_icon="📰",
+    page_title="국내 주식 마켓 대시보드",
+    page_icon="📈",
     layout="wide",
 )
 
@@ -154,41 +147,71 @@ st.markdown("""
 
 # ── 타이틀 ───────────────────────────────────────────────────
 
-st.title("📰 한경 금융 뉴스 대시보드")
+st.title("📈 국내 주식 마켓 대시보드")
 
 
-# ── 관심 종목 주가 ────────────────────────────────────────────
+# ── 등락률 TOP 섹션 ───────────────────────────────────────────
 
-st.subheader("📈 관심 종목")
+with st.spinner("시장 데이터 로딩 중..."):
+    _market_df, _market_date = load_market_data()
 
-watchlist = load_watchlist()
-tickers = tuple(watchlist.keys())
+if _market_df is not None:
+    st.subheader("🔥 등락률 TOP 5")
+    col_up, col_dn = st.columns(2)
 
-with st.spinner("주가 수집 중..."):
-    prices = fetch_all_prices(tickers)
+    top_up = _market_df.nlargest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
+    top_dn = _market_df.nsmallest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
 
-ticker_items = list(watchlist.items())
-for row_start in range(0, len(ticker_items), COLS_PER_ROW):
-    row = ticker_items[row_start : row_start + COLS_PER_ROW]
-    cols = st.columns(COLS_PER_ROW)
-    for j, (ticker, name) in enumerate(row):
-        data = prices.get(ticker)
-        with cols[j]:
-            if data:
-                sign = (
-                    "+" if data["direction"] == "up"
-                    else ("-" if data["direction"] == "down" else "")
-                )
-                delta = f"{sign}{data['rate']}% ({sign}{data['change']}원)"
-                st.metric(name, f"{data['price']}원", delta)
-            else:
-                st.metric(name, "조회 실패", None)
+    with col_up:
+        st.markdown("**상승률 TOP 5**")
+        for _, row in top_up.iterrows():
+            pct = row["등락률"]
+            st.markdown(
+                f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
+                f'<span style="color:#e03131;font-weight:700;">▲ {pct:.2f}%</span>',
+                unsafe_allow_html=True,
+            )
 
-valid_prices = [p for p in prices.values() if p]
-if valid_prices:
-    st.caption(f"마지막 업데이트: {valid_prices[0]['fetched_at']} · 60초마다 자동 갱신")
+    with col_dn:
+        st.markdown("**하락률 TOP 5**")
+        for _, row in top_dn.iterrows():
+            pct = row["등락률"]
+            st.markdown(
+                f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
+                f'<span style="color:#1971c2;font-weight:700;">▼ {abs(pct):.2f}%</span>',
+                unsafe_allow_html=True,
+            )
 
-st.divider()
+    st.divider()
+
+    # ── 거래대금 TOP 10 ───────────────────────────────────────
+    st.subheader("💰 거래대금 TOP 10")
+
+    top_amount = _market_df.nlargest(10, "거래대금")[["종목명", "거래대금", "등락률"]].copy()
+    top_amount.insert(0, "순위", range(1, 11))
+    top_amount["거래대금(억원)"] = (top_amount["거래대금"] / 1e8).round(0).astype(int)
+    top_amount["등락률"] = top_amount["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
+    top_amount = top_amount[["순위", "종목명", "거래대금(억원)", "등락률"]].reset_index(drop=True)
+
+    st.dataframe(top_amount, use_container_width=True, hide_index=True)
+    st.divider()
+
+    # ── 시가총액 TOP 10 ───────────────────────────────────────
+    st.subheader("🏦 시가총액 TOP 10")
+
+    top_cap = _market_df.nlargest(10, "시가총액")[["종목명", "시가총액", "현재가", "등락률"]].copy()
+    top_cap.insert(0, "순위", range(1, 11))
+    top_cap["시총(조원)"] = (top_cap["시가총액"] / 1e12).round(2)
+    top_cap["현재가"] = top_cap["현재가"].astype(int).map(lambda x: f"{x:,}원")
+    top_cap["등락률"] = top_cap["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
+    top_cap = top_cap[["순위", "종목명", "시총(조원)", "현재가", "등락률"]].reset_index(drop=True)
+
+    st.dataframe(top_cap, use_container_width=True, hide_index=True)
+    st.divider()
+
+else:
+    st.warning("시장 데이터를 불러오지 못했습니다.")
+    st.divider()
 
 
 # ── 사이드바 ① 뉴스 소스 (수집 전에 먼저 정의) ─────────────────
@@ -405,3 +428,12 @@ else:
   <div class="news-link">{press_badge}<a href="{link}" target="_blank">{title}</a>{stag}{badge}</div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ── 데이터 기준일 (하단) ──────────────────────────────────────
+
+st.divider()
+if _market_df is not None and _market_date:
+    st.caption(f"📅 시장 데이터 기준일: {_market_date} · 5분마다 자동 갱신 (FinanceDataReader)")
+else:
+    st.caption("📅 시장 데이터를 불러오지 못했습니다.")

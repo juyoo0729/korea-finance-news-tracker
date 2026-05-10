@@ -1,6 +1,8 @@
 beautifulsoup4
 feedparser==6.0.12
 ollama
+finance-datareader
+pykrx
 pyyaml
 requests
 rich
