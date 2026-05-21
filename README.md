@@ -176,6 +176,3 @@ MIT License — 개인 학습/포트폴리오 용도로 제작됨
 ## 🙋 만든 사람
 
 [@juyoo0729](https://github.com/juyoo0729)
-
-AIFFEL AI/ML 부트캠프 교육생 (2026.03.11 ~ 2026.09.10)
-ML / Data Science 분야 전환 준비 중
