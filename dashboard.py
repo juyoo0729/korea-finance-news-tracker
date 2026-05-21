@@ -11,11 +11,14 @@ import atexit
 import streamlit as st
 # import yaml  # watchlist_stocks.yaml 로딩 비활성화
 
+import html as _html
+
 from classifier import HybridClassifier
 from hankyung_feed import fetch_hankyung_finance
 from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
 from scorer import score_candidates
+from topic_cluster import get_top_topics
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "exaone3.5:2.4b"
@@ -74,6 +77,11 @@ def load_articles(max_items: int = 50, source: str = "한경 RSS", ticker: str =
     else:
         raw = fetch_hankyung_finance(max_items=max_items)
     return _deduplicate(raw)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_top_topics(titles: tuple[str, ...]) -> list[dict]:
+    return get_top_topics(list(titles))
 
 
 @st.cache_data(show_spinner=False)
@@ -291,18 +299,19 @@ with st.sidebar:
     auto_refresh = st.checkbox("🔄 자동 새로고침 (60초)", value=False)
     st.divider()
     st.subheader("📡 뉴스 소스")
-    news_source = st.selectbox(
-        "소스 선택",
-        options=["한경 RSS", "네이버 금융 - 전체", "네이버 금융 - 종목별"],
-        label_visibility="collapsed",
-    )
+    news_source = "네이버 금융 - 전체"
+    # news_source = st.selectbox(
+    #     "소스 선택",
+    #     options=["한경 RSS", "네이버 금융 - 전체", "네이버 금융 - 종목별"],
+    #     label_visibility="collapsed",
+    # )
     naver_ticker = ""
-    if news_source == "네이버 금융 - 종목별":
-        naver_ticker = st.text_input(
-            "종목 코드 (6자리)",
-            value="005930",
-            placeholder="예: 005930 (삼성전자)",
-        ).strip()
+    # if news_source == "네이버 금융 - 종목별":
+    #     naver_ticker = st.text_input(
+    #         "종목 코드 (6자리)",
+    #         value="005930",
+    #         placeholder="예: 005930 (삼성전자)",
+    #     ).strip()
     st.divider()
 
 
@@ -389,12 +398,13 @@ with st.sidebar:
         st.session_state.pop("classified_source", None)
         st.rerun()
 
-    label_map = {
-        "한경 RSS": "RSS: 한국경제신문 금융",
-        "네이버 금융 - 전체": "크롤링: 네이버 금융 전체",
-        "네이버 금융 - 종목별": f"크롤링: 네이버 금융 [{naver_ticker or '종목 미선택'}]",
-    }
-    st.caption(label_map.get(news_source, ""))
+    st.caption("크롤링: 네이버 금융 전체")
+    # label_map = {
+    #     "한경 RSS": "RSS: 한국경제신문 금융",
+    #     "네이버 금융 - 전체": "크롤링: 네이버 금융 전체",
+    #     "네이버 금융 - 종목별": f"크롤링: 네이버 금융 [{naver_ticker or '종목 미선택'}]",
+    # }
+    # st.caption(label_map.get(news_source, ""))
 
     st.divider()
     st.write(f"**DEBUG**")
@@ -463,6 +473,50 @@ if summarize_on and articles:
 
 elif summarize_on and not articles:
     st.info(f"'{selected_sector}' 관련 기사가 없어 요약을 생성하지 않았습니다.")
+
+
+# ── 오늘의 인기 주제 TOP 3 ───────────────────────────────────
+
+st.subheader("📌 오늘의 인기 주제 TOP 3")
+st.caption("sentence-transformers 임베딩으로 유사 헤드라인을 묶어 가장 많이 다뤄진 주제를 추립니다.")
+
+if not articles:
+    st.info("기사가 없어 주제 분석을 건너뜁니다.")
+else:
+    with st.spinner("주제 클러스터링 중..."):
+        topics = cached_top_topics(tuple(a.get("title", "") for a in articles))
+
+    if not topics:
+        st.info(
+            "`sentence-transformers` 또는 `scikit-learn`이 설치되지 않았습니다.\n\n"
+            "```\npip install sentence-transformers scikit-learn\n```"
+        )
+    else:
+        for topic in topics:
+            others = [h for h in topic["headlines"] if h != topic["rep_title"]]
+            others_preview = others[:4]
+            overflow = len(others) - len(others_preview)
+            others_html = " &nbsp;/&nbsp; ".join(
+                _html.escape(h) for h in others_preview
+            )
+            if overflow > 0:
+                others_html += f" &nbsp;<span style='color:#aaa;'>외 {overflow}건</span>"
+
+            rep = _html.escape(topic["rep_title"])
+            st.markdown(f"""
+<div style="border-left:4px solid #f0a500;padding:12px 18px;margin-bottom:10px;
+            background:#fffdf5;border-radius:6px;">
+  <div style="font-weight:700;font-size:0.88rem;color:#888;margin-bottom:4px;">
+    {topic['rank']}위 · {topic['count']}건
+  </div>
+  <div style="font-size:1.0rem;color:#222;font-weight:600;margin-bottom:{'6px' if others_html else '0'};">
+    📌 {rep}
+  </div>
+  {'<div style="font-size:0.82rem;color:#999;line-height:1.8;">' + others_html + '</div>' if others_html else ''}
+</div>
+""", unsafe_allow_html=True)
+
+st.divider()
 
 
 # ── 헤드라인 리스트 ───────────────────────────────────────────

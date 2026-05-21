@@ -6,5 +6,7 @@ pykrx
 pyyaml
 requests
 rich
+scikit-learn
+sentence-transformers
 streamlit
 streamlit-autorefresh
