@@ -15,6 +15,7 @@ from classifier import HybridClassifier
 from hankyung_feed import fetch_hankyung_finance
 from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
+from scorer import score_candidates
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "exaone3.5:2.4b"
@@ -141,6 +142,33 @@ st.markdown("""
 .news-link a:hover {
     text-decoration: underline;
 }
+.candidate-card {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-left: 4px solid #1a73e8;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+}
+.candidate-score {
+    display: inline-block;
+    background: #1a73e8;
+    color: #fff;
+    border-radius: 20px;
+    padding: 2px 12px;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+.reason-item {
+    color: #2e7d32;
+    font-size: 0.9rem;
+    margin: 2px 0;
+}
+.risk-item {
+    color: #e65100;
+    font-size: 0.9rem;
+    margin: 2px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -207,6 +235,48 @@ if _market_df is not None:
     top_cap = top_cap[["순위", "종목명", "시총(조원)", "현재가", "등락률"]].reset_index(drop=True)
 
     st.dataframe(top_cap, use_container_width=True, hide_index=True)
+    st.divider()
+
+    # ── 오늘의 후보 종목 ───────────────────────────────────────────
+    st.subheader("🎯 오늘의 후보 종목 TOP 10")
+    st.caption("1단계: 등락률·거래대금 절대 기준 → 상위 30개 / 2단계: 일봉 거래량·MA20·RSI(14) 보강")
+
+    with st.spinner("후보 종목 분석 중... (일봉 데이터 최대 30종목 조회)"):
+        candidates = score_candidates(_market_df)
+
+    if not candidates:
+        st.info(
+            "조건을 통과한 후보 종목이 없습니다. "
+            "오늘은 거래대금·등락률 기준을 충족한 종목이 없을 수 있습니다."
+        )
+    else:
+        for i, c in enumerate(candidates, 1):
+            change_pct  = c["등락률"]
+            change_color = "#e03131" if change_pct >= 0 else "#1971c2"
+            change_arrow = "▲" if change_pct >= 0 else "▼"
+
+            reasons_html = "".join(
+                f'<div class="reason-item">✅ {r}</div>' for r in c["후보이유"]
+            )
+            risks_html = "".join(
+                f'<div class="risk-item">⚠️ {r}</div>' for r in c["주의점"]
+            )
+            detail_html = reasons_html + risks_html
+
+            st.markdown(f"""
+<div class="candidate-card">
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:{'8px' if detail_html else '0'};">
+    <span style="font-size:1.05rem;font-weight:700;color:#333;">#{i} {c['종목명']}</span>
+    <span style="font-size:0.82rem;color:#777;">{c['티커']}</span>
+    <span style="font-size:0.98rem;font-weight:600;">{c['현재가']:,}원</span>
+    <span style="font-size:0.95rem;font-weight:700;color:{change_color};">{change_arrow} {abs(change_pct):.2f}%</span>
+    <span style="font-size:0.85rem;color:#555;">거래대금 {c['거래대금(억원)']:,}억원</span>
+    <span class="candidate-score">점수 {c['점수']}</span>
+  </div>
+  {detail_html}
+</div>
+""", unsafe_allow_html=True)
+
     st.divider()
 
 else:
