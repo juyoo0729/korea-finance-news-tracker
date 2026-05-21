@@ -44,14 +44,20 @@
 
 노이즈를 줄이기 위해 원본 종가가 아닌 **5일 이동평균에 미분을 적용**합니다. 각 지표는 점수뿐 아니라 **"하락세가 꺾이고 반등 신호 — 바닥 변곡점 가능성"** 같은 한국어 설명으로 출력됩니다.
 
-### 3. 다중 소스 뉴스 수집
-- 한국경제 RSS 피드 / 네이버 금융(전체·종목별) 크롤링, 중복 자동 제거
+### 3. 오늘의 인기 주제 TOP 3 (임베딩 클러스터링)
+- `sentence-transformers`로 헤드라인을 벡터화 후 `AgglomerativeClustering`으로 유사 제목 자동 그룹화
+- 클러스터 중심에 가장 가까운 제목을 대표 헤드라인으로 선정
+- 오늘 뉴스에서 가장 많이 다뤄진 주제 3개를 한눈에 파악
 
-### 4. 산업 섹터 자동 분류 (하이브리드)
+### 4. 다중 소스 뉴스 수집
+- 네이버 금융 전체 뉴스 크롤링, 중복 자동 제거
+- 한경 RSS·종목별 소스는 코드에 유지(주석 처리) — 필요 시 즉시 재활성화 가능
+
+### 5. 산업 섹터 자동 분류 (하이브리드)
 - 1단계 키워드 사전 매칭 → 미해결 건만 2단계 LLM 분류, 결과 캐싱
 - 지원 섹터: 반도체, 자동차, 이차전지, 바이오/제약, 금융, 게임/엔터, 조선/방산, 철강/소재, 부동산/건설, IT/플랫폼
 
-### 5. 로컬 LLM 요약
+### 6. 로컬 LLM 요약
 - Ollama + EXAONE 3.5로 헤드라인 묶음을 핵심 3줄로 요약 (API 비용 0)
 
 ## 🛠️ 기술 스택
@@ -63,6 +69,7 @@
 | 시장 데이터 | FinanceDataReader |
 | 지표 계산 | NumPy, pandas (미분·RSI·이동평균 직접 구현, 외부 지표 라이브러리 미사용) |
 | 뉴스 수집 | feedparser, requests, BeautifulSoup4 |
+| 임베딩·클러스터링 | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), scikit-learn |
 | LLM | Ollama (EXAONE 3.5 / Llama 3.2) |
 | 설정 | PyYAML |
 
@@ -73,6 +80,7 @@ korea-finance-news-tracker/
 ├── dashboard.py              # Streamlit 대시보드 (메인 진입점)
 ├── scorer.py                 # 후보 종목 2단계 스코어링 (미분/RSI/이동평균)
 ├── market_data.py            # FinanceDataReader 전종목 시세 수집
+├── topic_cluster.py          # 헤드라인 임베딩 클러스터링 → TOP 3 주제
 ├── news_tracker.py           # CLI 인터페이스 (뉴스 수집 → Markdown 저장)
 │
 ├── hankyung_feed.py          # 한경 RSS 수집
