@@ -81,6 +81,7 @@ korea-finance-news-tracker/
 ├── scorer.py                 # 후보 종목 2단계 스코어링 (미분/RSI/이동평균)
 ├── market_data.py            # FinanceDataReader 전종목 시세 수집
 ├── topic_cluster.py          # 헤드라인 임베딩 클러스터링 → TOP 3 주제
+├── news_cluster_demo.py      # 클러스터링 단독 실행 데모 스크립트
 ├── news_tracker.py           # CLI 인터페이스 (뉴스 수집 → Markdown 저장)
 │
 ├── hankyung_feed.py          # 한경 RSS 수집
