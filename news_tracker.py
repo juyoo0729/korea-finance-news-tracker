@@ -44,24 +44,18 @@ SUMMARY_PROMPT = """\
 위 헤드라인에서 '{keyword}' 관련 핵심 흐름을 한국어로 세 줄 요약하라."""
 
 
-def summarize(headlines: list[str], keyword: str, model: str) -> str:
-    try:
-        import ollama
-    except ImportError:
-        console.print("[bold red]오류:[/] ollama 패키지가 없습니다. 'pip install ollama' 실행 후 재시도하세요.")
-        raise SystemExit(1)
-
+def summarize(headlines: list[str], keyword: str, model: str | None = None) -> str:
+    from llm_client import _generate
     prompt = SUMMARY_PROMPT.format(
         headlines="\n".join(f"- {h}" for h in headlines),
         keyword=keyword,
     )
     try:
-        response = ollama.generate(model=model, prompt=prompt)
+        return _generate(prompt, model=model or None)
     except Exception as e:
-        console.print(f"[bold red]Ollama 오류:[/] {e}")
-        console.print("'ollama serve' 가 실행 중인지, 모델이 설치됐는지 확인하세요.")
+        console.print(f"[bold red]LLM 오류:[/] {e}")
+        console.print("OPENAI_API_KEY가 설정되어 있는지 확인하세요.")
         raise SystemExit(1)
-    return response["response"].strip()
 
 
 def filter_articles(articles: list[dict], keyword: str) -> list[dict]:
@@ -115,8 +109,8 @@ def print_stats(total: int, keyword: str | None, filtered: int | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="한경 금융 뉴스 수집 → Markdown 저장")
     parser.add_argument("--keyword",    default=None,             help="필터링할 키워드 (없으면 전체 저장)")
-    parser.add_argument("--summarize",  action="store_true",      help="Ollama로 3줄 요약 생성")
-    parser.add_argument("--model",      default="exaone3.5:2.4b", help="Ollama 모델명")
+    parser.add_argument("--summarize",  action="store_true",      help="GPT로 3줄 요약 생성")
+    parser.add_argument("--model",      default="gpt-5.4-mini",   help="OpenAI 모델명")
     parser.add_argument("--max-items",  type=int, default=50,     help="수집할 최대 기사 수")
     parser.add_argument("--output-dir", default=".",              help="Markdown 저장 폴더")
     args = parser.parse_args()

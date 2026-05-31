@@ -1,3 +1,5 @@
+import llm_client
+
 VALID_SECTORS = [
     "반도체", "자동차", "이차전지", "바이오/제약", "금융",
     "게임/엔터", "조선/방산", "철강/소재", "부동산/건설", "IT/플랫폼", "기타",
@@ -10,11 +12,9 @@ _PROMPT = """\
 답변은 위 선택지 중 하나만 정확히. 부연 설명 금지."""
 
 
-def classify_by_llm(text: str, model: str = "exaone3.5:2.4b") -> str:
+def classify_by_llm(text: str, model: str | None = None) -> str:
     try:
-        import ollama
-        response = ollama.generate(model=model, prompt=_PROMPT.format(text=text))
-        result = response["response"].strip()
+        result = llm_client._generate(_PROMPT.format(text=text), model=model)
         for sector in VALID_SECTORS:
             if sector in result:
                 return sector

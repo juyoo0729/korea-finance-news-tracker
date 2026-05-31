@@ -1,6 +1,7 @@
 beautifulsoup4
 feedparser==6.0.12
-ollama
+openai
+python-dotenv
 finance-datareader
 pykrx
 pyyaml

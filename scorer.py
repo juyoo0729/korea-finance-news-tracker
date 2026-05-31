@@ -109,45 +109,45 @@ def _compute_rsi(closes: pd.Series, period: int = 14) -> float:
 
 # ── 1단계: 스냅샷 절대 기준 점수 ─────────────────────────────────
 
-def _stage1_score(row) -> tuple[int, list[str], list[str]]:
+def _stage1_score(row) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]]]:
     """장중 스냅샷 데이터만으로 점수·이유·주의점을 계산한다."""
     change_pct = float(row.get("등락률", 0) or 0)
     amount     = float(row.get("거래대금", 0) or 0)
 
-    score:   int       = 0
-    reasons: list[str] = []
-    risks:   list[str] = []
+    score:   int                    = 0
+    reasons: list[tuple[str, int]]  = []
+    risks:   list[tuple[str, int]]  = []
 
     # 등락률 점수
     # +10% 이상 급등은 이미 추격매수 위험 구간이므로 감점한다.
     if 0 < change_pct <= RATE_SAFE_MAX:
         score += 15
-        reasons.append(f"안정적 상승 ({change_pct:.1f}%)")
+        reasons.append((f"안정적 상승 ({change_pct:.1f}%)", 15))
     elif RATE_SAFE_MAX < change_pct <= RATE_GOOD_MAX:
         score += 10
-        reasons.append(f"양호한 상승 ({change_pct:.1f}%)")
+        reasons.append((f"양호한 상승 ({change_pct:.1f}%)", 10))
     elif RATE_GOOD_MAX < change_pct < RATE_CAUTION_MAX:
         score += 5
-        risks.append(f"강한 상승 ({change_pct:.1f}%) — 단기 과열 주의")
+        risks.append((f"강한 상승 ({change_pct:.1f}%) — 단기 과열 주의", 5))
     elif change_pct >= RATE_CAUTION_MAX:
         score -= 15
-        risks.append(f"급등 과열 ({change_pct:.1f}%) — 추격매수 위험 구간")
+        risks.append((f"급등 과열 ({change_pct:.1f}%) — 추격매수 위험 구간", -15))
 
     # 거래대금 점수
     amount_eok = amount / 1e8
     if amount >= HIGH_TRADING_AMOUNT:
         score += 15
-        reasons.append(f"시장 상위권 거래대금 ({amount_eok:,.0f}억원)")
+        reasons.append((f"시장 상위권 거래대금 ({amount_eok:,.0f}억원)", 15))
     elif amount >= MIN_TRADING_AMOUNT:
         score += 10
-        reasons.append(f"충분한 거래대금 ({amount_eok:,.0f}억원)")
+        reasons.append((f"충분한 거래대금 ({amount_eok:,.0f}억원)", 10))
 
     return score, reasons, risks
 
 
 # ── 2단계: 일봉 기반 보강 점수 ───────────────────────────────────
 
-def _stage2_enrich(ticker: str) -> tuple[int, list[str], list[str]]:
+def _stage2_enrich(ticker: str) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]]]:
     """fdr.DataReader로 일봉을 가져와 추가 점수·이유·주의점을 반환한다.
 
     네트워크 오류나 데이터 부족 등 어떤 이유로든 실패하면 (0, [], [])을 반환한다.
@@ -179,14 +179,14 @@ def _stage2_enrich(ticker: str) -> tuple[int, list[str], list[str]]:
             vol_ratio = today_vol / avg_vol_20
             if vol_ratio >= VOL_HIGH_X:
                 score += 20
-                reasons.append(
-                    f"거래량 급증 ({vol_ratio:.1f}배 — 20일 평균 {avg_vol_20:,.0f}주 대비)"
-                )
+                reasons.append((
+                    f"거래량 급증 ({vol_ratio:.1f}배 — 20일 평균 {avg_vol_20:,.0f}주 대비)", 20
+                ))
             elif vol_ratio >= VOL_MID_X:
                 score += 15
-                reasons.append(
-                    f"거래량 증가 ({vol_ratio:.1f}배 — 20일 평균 {avg_vol_20:,.0f}주 대비)"
-                )
+                reasons.append((
+                    f"거래량 증가 ({vol_ratio:.1f}배 — 20일 평균 {avg_vol_20:,.0f}주 대비)", 15
+                ))
 
         # ── 20일 이동평균선 위/아래 ───────────────────────────────
         ma20          = closes.iloc[-21:-1].mean()
@@ -194,9 +194,9 @@ def _stage2_enrich(ticker: str) -> tuple[int, list[str], list[str]]:
 
         if current_close > ma20:
             score += 10
-            reasons.append(f"20일 이동평균선 상회 (현재 {current_close:,.0f}원 > MA20 {ma20:,.0f}원)")
+            reasons.append((f"20일 이동평균선 상회 (현재 {current_close:,.0f}원 > MA20 {ma20:,.0f}원)", 10))
         else:
-            risks.append(f"20일 이동평균선 하회 (현재 {current_close:,.0f}원 < MA20 {ma20:,.0f}원)")
+            risks.append((f"20일 이동평균선 하회 (현재 {current_close:,.0f}원 < MA20 {ma20:,.0f}원)", 0))
 
         # ── RSI(14) ───────────────────────────────────────────────
         rsi = _compute_rsi(closes)
@@ -204,15 +204,15 @@ def _stage2_enrich(ticker: str) -> tuple[int, list[str], list[str]]:
         if not pd.isna(rsi):
             if rsi <= RSI_EXTREME_OVERSOLD:
                 score += 20
-                reasons.append(f"RSI {rsi:.1f} — 극단적 과매도, 강한 반등 가능성")
+                reasons.append((f"RSI {rsi:.1f} — 극단적 과매도, 강한 반등 가능성", 20))
             elif rsi <= RSI_OVERSOLD:
                 score += 15
-                reasons.append(f"RSI {rsi:.1f} — 과매도 구간, 반등 가능성")
+                reasons.append((f"RSI {rsi:.1f} — 과매도 구간, 반등 가능성", 15))
             elif rsi >= RSI_OVERBOUGHT:
                 score -= 10
-                risks.append(f"RSI {rsi:.1f} — 과열 구간, 단기 조정 주의")
+                risks.append((f"RSI {rsi:.1f} — 과열 구간, 단기 조정 주의", -10))
             else:
-                reasons.append(f"RSI {rsi:.1f} — 중립 구간")
+                reasons.append((f"RSI {rsi:.1f} — 중립 구간", 0))
 
         # ── 미분 기반 지표 (속도·가속도·모멘텀) ──────────────────
         deriv = _compute_derivatives(closes)
@@ -234,51 +234,46 @@ def _stage2_enrich(ticker: str) -> tuple[int, list[str], list[str]]:
             if inflection and vel_avg <= REAL_DOWNTREND_THRESHOLD:
                 # 뚜렷하게 하락하던 중 가속도 음→양 전환 → 바닥 변곡점
                 score += 20
-                reasons.append(
+                reasons.append((
                     f"하락세가 꺾이고 반등 신호 — 바닥 변곡점 가능성"
-                    f" (속도 {vel_pct:+.2f}%/일, 가속도 양전환)"
-                )
+                    f" (속도 {vel_pct:+.2f}%/일, 가속도 양전환)", 20
+                ))
             elif inflection and vel_avg < 0:
                 # 가속도 전환은 있지만 하락폭이 미미 → 횡보 변곡, 점수 없음
-                reasons.append(
-                    f"횡보 중 방향 전환 신호 (속도 {vel_pct:+.2f}%/일 — 반등으로 보기엔 하락폭 부족)"
-                )
+                reasons.append((
+                    f"횡보 중 방향 전환 신호 (속도 {vel_pct:+.2f}%/일 — 반등으로 보기엔 하락폭 부족)", 0
+                ))
             elif inflection and vel_avg >= 0:
                 # 상승 중 가속도도 재전환 → 상승 재가속
                 score += 10
-                reasons.append(
-                    f"상승 재가속 신호 — 모멘텀 회복"
-                    f" (속도 {vel_pct:+.2f}%/일)"
-                )
+                reasons.append((
+                    f"상승 재가속 신호 — 모멘텀 회복 (속도 {vel_pct:+.2f}%/일)", 10
+                ))
             elif acc_current > 0 and vel_avg > 0:
                 # 상승 + 가속 지속
                 score += 10
-                reasons.append(f"상승 가속 중 (속도 {vel_pct:+.2f}%/일)")
+                reasons.append((f"상승 가속 중 (속도 {vel_pct:+.2f}%/일)", 10))
             elif acc_current < 0 and vel_avg > 0:
                 # 상승 중이지만 둔화
-                risks.append(
-                    f"상승 모멘텀 약화 중 (속도 {vel_pct:+.2f}%/일, 둔화)"
-                )
+                risks.append((f"상승 모멘텀 약화 중 (속도 {vel_pct:+.2f}%/일, 둔화)", 0))
             elif acc_current < 0 and vel_avg < 0:
                 # 하락 가속 중 — 이중 경고
                 score -= 10
-                risks.append(
-                    f"하락 가속 중 — 추가 하락 경계 (속도 {vel_pct:+.2f}%/일)"
-                )
+                risks.append((f"하락 가속 중 — 추가 하락 경계 (속도 {vel_pct:+.2f}%/일)", -10))
 
             # 20일 모멘텀
             if not pd.isna(momentum_pct):
                 if momentum_pct >= 10:
                     score += 15
-                    reasons.append(f"20일 모멘텀 강세 ({momentum_pct:+.1f}%)")
+                    reasons.append((f"20일 모멘텀 강세 ({momentum_pct:+.1f}%)", 15))
                 elif momentum_pct >= 3:
                     score += 10
-                    reasons.append(f"20일 모멘텀 양호 ({momentum_pct:+.1f}%)")
+                    reasons.append((f"20일 모멘텀 양호 ({momentum_pct:+.1f}%)", 10))
                 elif momentum_pct <= -10:
                     score -= 10
-                    risks.append(f"20일 모멘텀 약세 ({momentum_pct:+.1f}%)")
+                    risks.append((f"20일 모멘텀 약세 ({momentum_pct:+.1f}%)", -10))
                 else:
-                    reasons.append(f"20일 모멘텀 중립 ({momentum_pct:+.1f}%)")
+                    reasons.append((f"20일 모멘텀 중립 ({momentum_pct:+.1f}%)", 0))
 
         return score, reasons, risks
 

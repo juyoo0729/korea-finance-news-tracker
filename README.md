@@ -1,11 +1,11 @@
 # 📰 Korea Finance Tracker
 
 > 한국 경제 뉴스를 자동 수집·분류하고, **수학(미분) 기반으로 "오늘 살펴볼 만한 종목 후보"를 추려주는** 모니터링 도구
-> API 비용 없이 동작 — 로컬 LLM(Ollama) + 공개 시장 데이터 활용
+> OpenAI GPT + 공개 시장 데이터 활용
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red)
-![Ollama](https://img.shields.io/badge/Ollama-EXAONE_3.5-green)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--5.4-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ## 🎯 프로젝트 소개
@@ -57,8 +57,9 @@
 - 1단계 키워드 사전 매칭 → 미해결 건만 2단계 LLM 분류, 결과 캐싱
 - 지원 섹터: 반도체, 자동차, 이차전지, 바이오/제약, 금융, 게임/엔터, 조선/방산, 철강/소재, 부동산/건설, IT/플랫폼
 
-### 6. 로컬 LLM 요약
-- Ollama + EXAONE 3.5로 헤드라인 묶음을 핵심 3줄로 요약 (API 비용 0)
+### 6. LLM 요약
+- OpenAI GPT(`gpt-5.4-mini`)로 헤드라인 묶음을 핵심 3줄로 요약
+- `OPENAI_API_KEY` 환경변수 필요 (`.env` 파일 지원)
 
 ## 🛠️ 기술 스택
 
@@ -70,8 +71,8 @@
 | 지표 계산 | NumPy, pandas (미분·RSI·이동평균 직접 구현, 외부 지표 라이브러리 미사용) |
 | 뉴스 수집 | feedparser, requests, BeautifulSoup4 |
 | 임베딩·클러스터링 | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), scikit-learn |
-| LLM | Ollama (EXAONE 3.5 / Llama 3.2) |
-| 설정 | PyYAML |
+| LLM | OpenAI GPT (gpt-5.4-mini) |
+| 설정 | PyYAML, python-dotenv |
 
 ## 📁 프로젝트 구조
 
@@ -83,6 +84,7 @@ korea-finance-news-tracker/
 ├── topic_cluster.py          # 헤드라인 임베딩 클러스터링 → TOP 3 주제
 ├── news_cluster_demo.py      # 클러스터링 단독 실행 데모 스크립트
 ├── news_tracker.py           # CLI 인터페이스 (뉴스 수집 → Markdown 저장)
+├── llm_client.py             # OpenAI GPT 클라이언트 (요약·분류 공통 백엔드)
 │
 ├── hankyung_feed.py          # 한경 RSS 수집
 ├── naver_finance_feed.py     # 네이버 금융 크롤링 (전체/종목별)
@@ -90,11 +92,12 @@ korea-finance-news-tracker/
 │
 ├── classifier.py             # 하이브리드 섹터 분류 메인
 ├── classifier_keywords.py    # 키워드 사전 기반 분류
-├── classifier_llm.py         # 로컬 LLM 기반 분류
+├── classifier_llm.py         # GPT 기반 분류
 │
 ├── sectors.yaml              # 섹터별 키워드 사전
 ├── watchlist_stocks.yaml     # 관심 종목 목록
 ├── classification_cache.json # 섹터 분류 캐시 (자동 생성)
+├── .env                      # API 키 설정 (OPENAI_API_KEY, git 추적 제외)
 │
 ├── requirements.txt
 └── README.md
@@ -110,15 +113,15 @@ cd korea-finance-news-tracker
 pip install -r requirements.txt
 ```
 
-### 2. Ollama 설치 및 모델 다운로드 (뉴스 요약용, 선택)
+### 2. API 키 설정 (뉴스 요약·LLM 분류용)
 
-[Ollama 공식 사이트](https://ollama.com/download)에서 설치 후:
+프로젝트 루트에 `.env` 파일을 만들고 OpenAI API 키를 입력합니다:
 
-```bash
-ollama pull exaone3.5:2.4b
+```
+OPENAI_API_KEY=sk-...
 ```
 
-> Ollama가 없어도 후보 스코어링·뉴스 수집은 정상 동작하며, 요약 기능만 비활성화됩니다.
+> API 키가 없어도 후보 스코어링·뉴스 수집·임베딩 클러스터링은 정상 동작하며, LLM 요약·분류 기능만 비활성화됩니다.
 
 ### 3. 실행
 
@@ -132,6 +135,8 @@ streamlit run dashboard.py
 
 ```bash
 python news_tracker.py --keyword 반도체 --summarize
+# 모델 지정 (기본: gpt-5.4-mini)
+python news_tracker.py --keyword SK하이닉스 --summarize --model gpt-5.4-mini
 ```
 
 ## 💡 개발 과정에서 배운 점
@@ -157,9 +162,9 @@ python news_tracker.py --keyword 반도체 --summarize
 - RSI가 설명에는 나오지만 점수엔 약하게 반영 → 과매도 구간에 명확한 가점 부여
 - 결과를 눈으로 보고 "이건 이상한데?"에서 출발해 기준을 다듬는 과정은 **하이퍼파라미터 튜닝과 동일한 사고**였음
 
-### 한국어 뉴스의 별명/이형 표기 & API 의존성 회피
+### 한국어 뉴스의 별명/이형 표기
 - "삼성전자"가 헤드라인에선 "삼전", "50만전자"로 더 자주 등장 → 별명 사전 구조 도입
-- 비용·키 관리 부담을 피하기 위해 **로컬 LLM(EXAONE)** 사용, RTX 3070 환경에서 한국어 요약 품질이 Llama 3.2보다 우수
+- LLM 백엔드는 `llm_client.py`로 분리해 요약·분류 모듈이 모두 같은 진입점을 공유, 모델 교체가 한 곳에서 이루어지도록 설계
 
 ## 🔧 향후 개선 방향
 
