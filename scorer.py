@@ -119,7 +119,7 @@ def _stage1_score(row) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]
     risks:   list[tuple[str, int]]  = []
 
     # 등락률 점수
-    # +10% 이상 급등은 이미 추격매수 위험 구간이므로 감점한다.
+    # +10% 이상 급등은 이미 단기 과열 구간이므로 감점한다.
     if 0 < change_pct <= RATE_SAFE_MAX:
         score += 15
         reasons.append((f"안정적 상승 ({change_pct:.1f}%)", 15))
@@ -131,7 +131,7 @@ def _stage1_score(row) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]
         risks.append((f"강한 상승 ({change_pct:.1f}%) — 단기 과열 주의", 5))
     elif change_pct >= RATE_CAUTION_MAX:
         score -= 15
-        risks.append((f"급등 과열 ({change_pct:.1f}%) — 추격매수 위험 구간", -15))
+        risks.append((f"급등 과열 ({change_pct:.1f}%) — 단기 변동성 확대 구간", -15))
 
     # 거래대금 점수
     amount_eok = amount / 1e8
@@ -215,13 +215,13 @@ def _stage2_enrich(
         if not pd.isna(rsi):
             if rsi <= RSI_EXTREME_OVERSOLD:
                 score += 20
-                reasons.append((f"RSI {rsi:.1f} — 극단적 과매도, 강한 반등 가능성", 20))
+                reasons.append((f"RSI {rsi:.1f} — 극단적 과매도 구간으로 분류됨", 20))
             elif rsi <= RSI_OVERSOLD:
                 score += 15
-                reasons.append((f"RSI {rsi:.1f} — 과매도 구간, 반등 가능성", 15))
+                reasons.append((f"RSI {rsi:.1f} — 과매도 구간으로 분류됨", 15))
             elif rsi >= RSI_OVERBOUGHT:
                 score -= 10
-                risks.append((f"RSI {rsi:.1f} — 과열 구간, 단기 조정 주의", -10))
+                risks.append((f"RSI {rsi:.1f} — 과열 구간으로 분류됨 (주의 구간)", -10))
             else:
                 reasons.append((f"RSI {rsi:.1f} — 중립 구간", 0))
 
@@ -246,31 +246,31 @@ def _stage2_enrich(
                 # 뚜렷하게 하락하던 중 가속도 음→양 전환 → 바닥 변곡점
                 score += 20
                 reasons.append((
-                    f"하락세가 꺾이고 반등 신호 — 바닥 변곡점 가능성"
-                    f" (속도 {vel_pct:+.2f}%/일, 가속도 양전환)", 20
+                    f"하락 추세 중 가속도 양전환 — 바닥 변곡점 조건 발생"
+                    f" (속도 {vel_pct:+.2f}%/일)", 20
                 ))
             elif inflection and vel_avg < 0:
                 # 가속도 전환은 있지만 하락폭이 미미 → 횡보 변곡, 점수 없음
                 reasons.append((
-                    f"횡보 중 방향 전환 신호 (속도 {vel_pct:+.2f}%/일 — 반등으로 보기엔 하락폭 부족)", 0
+                    f"횡보 중 방향 전환 (속도 {vel_pct:+.2f}%/일 — 변곡 판정 기준 미달)", 0
                 ))
             elif inflection and vel_avg >= 0:
                 # 상승 중 가속도도 재전환 → 상승 재가속
                 score += 10
                 reasons.append((
-                    f"상승 재가속 신호 — 모멘텀 회복 (속도 {vel_pct:+.2f}%/일)", 10
+                    f"상승 재가속 상태 — 모멘텀 회복 (속도 {vel_pct:+.2f}%/일)", 10
                 ))
             elif acc_current > 0 and vel_avg > 0:
                 # 상승 + 가속 지속
                 score += 10
-                reasons.append((f"상승 가속 중 (속도 {vel_pct:+.2f}%/일)", 10))
+                reasons.append((f"상승 가속 상태 (속도 {vel_pct:+.2f}%/일)", 10))
             elif acc_current < 0 and vel_avg > 0:
                 # 상승 중이지만 둔화
-                risks.append((f"상승 모멘텀 약화 중 (속도 {vel_pct:+.2f}%/일, 둔화)", 0))
+                risks.append((f"상승 모멘텀 둔화 상태 (속도 {vel_pct:+.2f}%/일)", 0))
             elif acc_current < 0 and vel_avg < 0:
                 # 하락 가속 중 — 이중 경고
                 score -= 10
-                risks.append((f"하락 가속 중 — 추가 하락 경계 (속도 {vel_pct:+.2f}%/일)", -10))
+                risks.append((f"하락 가속 상태 — 단기 변동성 확대 구간 (속도 {vel_pct:+.2f}%/일)", -10))
 
             # 20일 모멘텀
             if not pd.isna(momentum_pct):

@@ -22,7 +22,7 @@ from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
 from scorer import score_candidates
 from topic_cluster import get_top_topics
-from trade_signal import analyze_trade_timing
+from trade_signal import analyze_market_state
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -99,8 +99,8 @@ def load_latest_backtest() -> tuple[pd.DataFrame, str] | None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_trade_timing(ticker: str) -> dict | None:
-    return analyze_trade_timing(ticker)
+def cached_market_state(ticker: str) -> dict | None:
+    return analyze_market_state(ticker)
 
 
 @st.cache_data(show_spinner=False)
@@ -344,7 +344,7 @@ st.title("📈 국내 주식 마켓 대시보드")
 
 # ── 후보 종목 (그리드, 항상 표시) ───────────────────────────
 
-st.subheader("🎯 오늘의 후보 종목 TOP 10")
+st.subheader("🎯 오늘의 단기 관찰 종목 TOP 10")
 st.caption("1단계: 등락률·거래대금 절대 기준 → 상위 30개 / 2단계: 일봉 거래량·MA20·RSI(14) 보강")
 
 if "selected_candidate" not in st.session_state:
@@ -415,20 +415,20 @@ if _market_df is not None:
                         unsafe_allow_html=True,
                     )
 
-            # ── 매매 타이밍 차트 + 신호 ─────────────────────────
-            st.markdown("#### ⏱️ 매매 타이밍")
-            with st.spinner("매매 신호 분석 중..."):
-                timing = cached_trade_timing(sel_ticker)
+            # ── 단기 변동성 관찰 차트 + 시장 상태 ───────────────
+            st.markdown("#### ⏱️ 단기 변동성 관찰")
+            with st.spinner("지표 상태 분석 중..."):
+                timing = cached_market_state(sel_ticker)
 
             if timing is None:
-                st.info("일봉 데이터가 부족해 매매 신호를 계산할 수 없습니다.")
+                st.info("일봉 데이터가 부족해 지표 상태를 계산할 수 없습니다.")
             else:
-                _sig = timing["signal"]
-                _sig_color = {"매수 우위": "#e03131", "매도 우위": "#1971c2"}.get(_sig, "#6c757d")
+                _sig = timing["state"]
+                _sig_color = {"상방 조건 우세": "#e03131", "하방 리스크 우세": "#1971c2"}.get(_sig, "#6c757d")
                 st.markdown(
                     f'<span style="background:{_sig_color};color:#fff;border-radius:20px;'
                     f'padding:3px 14px;font-size:0.9rem;font-weight:700;">'
-                    f'현재 신호: {_sig}</span>',
+                    f'현재 시장 상태: {_sig}</span>',
                     unsafe_allow_html=True,
                 )
                 for _r in timing["reasons"]:
@@ -436,12 +436,12 @@ if _market_df is not None:
 
                 _lv = timing["levels"]
                 _lv_cols = st.columns(3)
-                _lv_cols[0].metric("🛡️ 지지선 (20일 저가)", f"{_lv['지지선(20일 저가)']:,.0f}원",
-                                   help="이탈 시 손절 검토 구간")
-                _lv_cols[1].metric("📏 MA20 (눌림목)", f"{_lv['MA20']:,.0f}원",
-                                   help="조정 시 분할 매수 참고 구간")
-                _lv_cols[2].metric("🎯 저항선 (60일 고가)", f"{_lv['저항선(60일 고가)']:,.0f}원",
-                                   help="도달 시 차익실현 검토 구간")
+                _lv_cols[0].metric("🛡️ 하단 기준선 (20일 저가)", f"{_lv['하단 기준선(20일 저가)']:,.0f}원",
+                                   help="하단 기준 이탈 주의 구간")
+                _lv_cols[1].metric("📏 MA20 (단기 추세 기준선)", f"{_lv['MA20']:,.0f}원",
+                                   help="중심선 근접 구간")
+                _lv_cols[2].metric("🎯 상단 기준선 (60일 고가)", f"{_lv['상단 기준선(60일 고가)']:,.0f}원",
+                                   help="상단 기준 근접 구간")
 
                 import plotly.graph_objects as go
 
@@ -454,31 +454,31 @@ if _market_df is not None:
                 fig.add_trace(go.Scatter(x=_bars.index, y=_bars["MA20"], name="MA20",
                                          line=dict(color="#1a73e8", width=1)))
 
-                _buys  = [e for e in timing["events"] if e["side"] == "매수"]
-                _sells = [e for e in timing["events"] if e["side"] == "매도"]
-                if _buys:
+                _ups   = [e for e in timing["events"] if e["side"] == "상방"]
+                _downs = [e for e in timing["events"] if e["side"] == "하방"]
+                if _ups:
                     fig.add_trace(go.Scatter(
-                        x=[e["date"] for e in _buys], y=[e["price"] for e in _buys],
-                        mode="markers", name="매수 신호",
+                        x=[e["date"] for e in _ups], y=[e["price"] for e in _ups],
+                        mode="markers", name="상방 전환 이벤트",
                         marker=dict(symbol="triangle-up", size=12, color="#e03131"),
-                        text=[e["label"] for e in _buys],
-                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>매수</extra>",
+                        text=[e["label"] for e in _ups],
+                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>상방</extra>",
                     ))
-                if _sells:
+                if _downs:
                     fig.add_trace(go.Scatter(
-                        x=[e["date"] for e in _sells], y=[e["price"] for e in _sells],
-                        mode="markers", name="매도 신호",
+                        x=[e["date"] for e in _downs], y=[e["price"] for e in _downs],
+                        mode="markers", name="하방 전환 이벤트",
                         marker=dict(symbol="triangle-down", size=12, color="#1971c2"),
-                        text=[e["label"] for e in _sells],
-                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>매도</extra>",
+                        text=[e["label"] for e in _downs],
+                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>하방</extra>",
                     ))
 
-                fig.add_hline(y=_lv["지지선(20일 저가)"], line_dash="dash",
+                fig.add_hline(y=_lv["하단 기준선(20일 저가)"], line_dash="dash",
                               line_color="#2e7d32", line_width=1,
-                              annotation_text="지지선", annotation_position="bottom left")
-                fig.add_hline(y=_lv["저항선(60일 고가)"], line_dash="dash",
+                              annotation_text="하단 기준선", annotation_position="bottom left")
+                fig.add_hline(y=_lv["상단 기준선(60일 고가)"], line_dash="dash",
                               line_color="#e65100", line_width=1,
-                              annotation_text="저항선", annotation_position="top left")
+                              annotation_text="상단 기준선", annotation_position="top left")
 
                 fig.update_layout(
                     height=380, margin=dict(l=10, r=10, t=30, b=10),
@@ -488,8 +488,9 @@ if _market_df is not None:
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.caption(
-                    "▲ 매수 신호: 골든크로스(MA5>MA20)·RSI 30 상향 탈출 / "
-                    "▼ 매도 신호: 데드크로스·RSI 70 하향 이탈 — 참고용이며 투자 판단의 책임은 본인에게 있습니다."
+                    "▲ 상방 전환 이벤트: MA5가 MA20 상향 돌파·RSI 30 상향 통과 / "
+                    "▼ 하방 전환 이벤트: MA5가 MA20 하향 이탈·RSI 70 하향 통과 — "
+                    "과거 조건 발생 지점의 시각화이며 매매 신호가 아닙니다."
                 )
 else:
     st.warning("시장 데이터를 불러오지 못했습니다.")
@@ -703,3 +704,8 @@ if _market_df is not None and _market_date:
     st.caption(f"📅 시장 데이터 기준일: {_market_date} · 5분마다 자동 갱신 (FinanceDataReader)")
 else:
     st.caption("📅 시장 데이터를 불러오지 못했습니다.")
+
+st.caption(
+    "ℹ️ 이 대시보드는 공개 시장 데이터와 사용자가 정의한 기술적 조건을 시각화하는 학습용 도구입니다. "
+    "특정 종목의 매수·매도 추천, 수익 예측, 자동매매 기능을 제공하지 않습니다."
+)
