@@ -5,3 +5,5 @@ __pycache__/
 news_*.md
 classification_cache.json
 *.log
+data_cache/
+results/

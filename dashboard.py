@@ -8,8 +8,9 @@ dashboard.py — 한경 금융 뉴스 Streamlit 대시보드
 import atexit
 from dotenv import load_dotenv
 load_dotenv()
-# from pathlib import Path  # watchlist yaml 경로 불필요
+from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 # import yaml  # watchlist_stocks.yaml 로딩 비활성화
 
@@ -78,6 +79,22 @@ def load_articles(max_items: int = 50, source: str = "한경 RSS", ticker: str =
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_top_topics(titles: tuple[str, ...]) -> list[dict]:
     return get_top_topics(list(titles))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_latest_backtest() -> tuple[pd.DataFrame, str] | None:
+    """results/ 폴더에서 가장 최근 백테스트 CSV를 읽는다. 없으면 None."""
+    files = sorted(
+        Path(__file__).parent.glob("results/backtest_*.csv"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not files:
+        return None
+    try:
+        df = pd.read_csv(files[-1], dtype={"티커": str})
+        return df, files[-1].name
+    except Exception:
+        return None
 
 
 @st.cache_data(show_spinner=False)
@@ -393,6 +410,49 @@ if _market_df is not None:
                     )
 else:
     st.warning("시장 데이터를 불러오지 못했습니다.")
+
+
+# ── 백테스트 결과 ─────────────────────────────────────────────
+
+with st.expander("🧪 백테스트 결과 — 스코어링 룰의 과거 성과", expanded=False):
+    _bt = load_latest_backtest()
+    if _bt is None:
+        st.info(
+            "백테스트 결과가 아직 없습니다. 터미널에서 실행 후 새로고침하세요:\n\n"
+            "```\npython backtest.py --start 2026-01-01 --end 2026-05-31 --interval 5\n```"
+        )
+    else:
+        _bt_df, _bt_name = _bt
+        from backtest import summarize_by_score, summarize_overall
+
+        _overall = summarize_overall(_bt_df)
+        st.caption(
+            f"파일: `{_bt_name}` · 기준일 {_bt_df['기준일'].min()} ~ {_bt_df['기준일'].max()} · "
+            f"후보 {len(_bt_df)}건 (바닥반등 {int(_bt_df['바닥반등'].sum())}건)"
+        )
+
+        _metric_cols = st.columns(len(_overall))
+        for _col, (_, _row) in zip(_metric_cols, _overall.iterrows()):
+            with _col:
+                if _row["표본"] == 0 or pd.isna(_row["후보 평균(%)"]):
+                    st.metric(_row["구간"], "표본 없음")
+                else:
+                    st.metric(
+                        f"{_row['구간']} 평균 수익률",
+                        f"{_row['후보 평균(%)']:+.2f}%",
+                        delta=f"{_row['초과수익(%p)']:+.2f}%p vs KOSPI · 승률 {_row['승률(%)']:.0f}%",
+                    )
+
+        st.markdown("**구간별 상세 (vs KOSPI)**")
+        st.dataframe(_overall, use_container_width=True, hide_index=True)
+
+        st.markdown("**점수 구간별 — 고득점 후보가 실제로 나았는지**")
+        st.dataframe(summarize_by_score(_bt_df), use_container_width=True, hide_index=True)
+
+        st.caption(
+            "※ 유니버스는 현재 거래대금 상위 종목 기준이라 생존 편향이 일부 있으며, "
+            "거래대금·시가총액은 일봉 근사값입니다. 자세한 한계는 backtest.py 참고."
+        )
 
 st.divider()
 

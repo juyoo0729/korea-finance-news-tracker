@@ -147,18 +147,29 @@ def _stage1_score(row) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]
 
 # ── 2단계: 일봉 기반 보강 점수 ───────────────────────────────────
 
-def _stage2_enrich(ticker: str) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]]]:
-    """fdr.DataReader로 일봉을 가져와 추가 점수·이유·주의점을 반환한다.
+def _default_bars(ticker: str) -> pd.DataFrame | None:
+    """오늘 기준 최근 CANDLE_LOOKBACK_DAYS 캘린더 일수의 일봉을 fdr로 조회한다."""
+    if not _FDR_AVAILABLE:
+        return None
+    start = (datetime.today() - timedelta(days=CANDLE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    return fdr.DataReader(ticker, start)
+
+
+def _stage2_enrich(
+    ticker: str,
+    bars_provider=None,
+) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]]]:
+    """일봉을 가져와 추가 점수·이유·주의점을 반환한다.
+
+    bars_provider: 티커 → 일봉 DataFrame(Close/Volume 컬럼, 마지막 행이 "기준일")을
+                   반환하는 콜러블. None이면 오늘 기준 fdr 조회(기존 동작).
+                   backtest.py가 과거 시점 재현(look-ahead 방지)에 사용한다.
 
     네트워크 오류나 데이터 부족 등 어떤 이유로든 실패하면 (0, [], [])을 반환한다.
     호출자는 실패해도 1단계 점수만으로 그대로 처리하면 된다.
     """
-    if not _FDR_AVAILABLE:
-        return 0, [], []
-
     try:
-        start = (datetime.today() - timedelta(days=CANDLE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        df = fdr.DataReader(ticker, start)
+        df = (bars_provider or _default_bars)(ticker)
 
         # 20일 이동평균 + RSI(14) 계산에 최소 21개 필요
         if df is None or len(df) < 21:
@@ -283,13 +294,15 @@ def _stage2_enrich(ticker: str) -> tuple[int, list[tuple[str, int]], list[tuple[
 
 # ── 공개 인터페이스 ───────────────────────────────────────────────
 
-def score_candidates(df: pd.DataFrame) -> list[dict]:
+def score_candidates(df: pd.DataFrame, bars_provider=None) -> list[dict]:
     """2단계 룰로 후보 종목을 선정하고 최종 상위 10개를 반환한다.
 
     Parameters
     ----------
     df : market_data.load_market_data()가 반환한 DataFrame
          필요 컬럼: 티커, 종목명, 현재가, 등락률, 거래대금, 시가총액, 거래량
+    bars_provider : 티커 → 일봉 DataFrame을 반환하는 콜러블 (선택).
+         None이면 오늘 기준 fdr 조회. backtest.py가 과거 시점 재현에 사용.
 
     Returns
     -------
@@ -327,7 +340,7 @@ def score_candidates(df: pd.DataFrame) -> list[dict]:
 
     # ── 2단계: 일봉 보강 (top 30에만 적용) ───────────────────────
     for c in top30:
-        s2, s2_reasons, s2_risks = _stage2_enrich(c["티커"])
+        s2, s2_reasons, s2_risks = _stage2_enrich(c["티커"], bars_provider)
         c["점수"]    += s2
         c["후보이유"] += s2_reasons
         c["주의점"]   += s2_risks
