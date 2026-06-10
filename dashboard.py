@@ -22,6 +22,7 @@ from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
 from scorer import score_candidates
 from topic_cluster import get_top_topics
+from trade_signal import analyze_trade_timing
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -95,6 +96,11 @@ def load_latest_backtest() -> tuple[pd.DataFrame, str] | None:
         return df, files[-1].name
     except Exception:
         return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_trade_timing(ticker: str) -> dict | None:
+    return analyze_trade_timing(ticker)
 
 
 @st.cache_data(show_spinner=False)
@@ -408,6 +414,83 @@ if _market_df is not None:
                         f'<div class="risk-item">⚠️ {r[0]}{score_str}</div>',
                         unsafe_allow_html=True,
                     )
+
+            # ── 매매 타이밍 차트 + 신호 ─────────────────────────
+            st.markdown("#### ⏱️ 매매 타이밍")
+            with st.spinner("매매 신호 분석 중..."):
+                timing = cached_trade_timing(sel_ticker)
+
+            if timing is None:
+                st.info("일봉 데이터가 부족해 매매 신호를 계산할 수 없습니다.")
+            else:
+                _sig = timing["signal"]
+                _sig_color = {"매수 우위": "#e03131", "매도 우위": "#1971c2"}.get(_sig, "#6c757d")
+                st.markdown(
+                    f'<span style="background:{_sig_color};color:#fff;border-radius:20px;'
+                    f'padding:3px 14px;font-size:0.9rem;font-weight:700;">'
+                    f'현재 신호: {_sig}</span>',
+                    unsafe_allow_html=True,
+                )
+                for _r in timing["reasons"]:
+                    st.markdown(f"- {_r}")
+
+                _lv = timing["levels"]
+                _lv_cols = st.columns(3)
+                _lv_cols[0].metric("🛡️ 지지선 (20일 저가)", f"{_lv['지지선(20일 저가)']:,.0f}원",
+                                   help="이탈 시 손절 검토 구간")
+                _lv_cols[1].metric("📏 MA20 (눌림목)", f"{_lv['MA20']:,.0f}원",
+                                   help="조정 시 분할 매수 참고 구간")
+                _lv_cols[2].metric("🎯 저항선 (60일 고가)", f"{_lv['저항선(60일 고가)']:,.0f}원",
+                                   help="도달 시 차익실현 검토 구간")
+
+                import plotly.graph_objects as go
+
+                _bars = timing["bars"]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=_bars.index, y=_bars["Close"], name="종가",
+                                         line=dict(color="#222", width=1.6)))
+                fig.add_trace(go.Scatter(x=_bars.index, y=_bars["MA5"], name="MA5",
+                                         line=dict(color="#f0a500", width=1, dash="dot")))
+                fig.add_trace(go.Scatter(x=_bars.index, y=_bars["MA20"], name="MA20",
+                                         line=dict(color="#1a73e8", width=1)))
+
+                _buys  = [e for e in timing["events"] if e["side"] == "매수"]
+                _sells = [e for e in timing["events"] if e["side"] == "매도"]
+                if _buys:
+                    fig.add_trace(go.Scatter(
+                        x=[e["date"] for e in _buys], y=[e["price"] for e in _buys],
+                        mode="markers", name="매수 신호",
+                        marker=dict(symbol="triangle-up", size=12, color="#e03131"),
+                        text=[e["label"] for e in _buys],
+                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>매수</extra>",
+                    ))
+                if _sells:
+                    fig.add_trace(go.Scatter(
+                        x=[e["date"] for e in _sells], y=[e["price"] for e in _sells],
+                        mode="markers", name="매도 신호",
+                        marker=dict(symbol="triangle-down", size=12, color="#1971c2"),
+                        text=[e["label"] for e in _sells],
+                        hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>매도</extra>",
+                    ))
+
+                fig.add_hline(y=_lv["지지선(20일 저가)"], line_dash="dash",
+                              line_color="#2e7d32", line_width=1,
+                              annotation_text="지지선", annotation_position="bottom left")
+                fig.add_hline(y=_lv["저항선(60일 고가)"], line_dash="dash",
+                              line_color="#e65100", line_width=1,
+                              annotation_text="저항선", annotation_position="top left")
+
+                fig.update_layout(
+                    height=380, margin=dict(l=10, r=10, t=30, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    xaxis_title=None, yaxis_title=None,
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(
+                    "▲ 매수 신호: 골든크로스(MA5>MA20)·RSI 30 상향 탈출 / "
+                    "▼ 매도 신호: 데드크로스·RSI 70 하향 이탈 — 참고용이며 투자 판단의 책임은 본인에게 있습니다."
+                )
 else:
     st.warning("시장 데이터를 불러오지 못했습니다.")
 
