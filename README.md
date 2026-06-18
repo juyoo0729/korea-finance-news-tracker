@@ -159,13 +159,35 @@ OPENAI_API_KEY=sk-...
 
 > API 키가 없어도 후보 스코어링·뉴스 수집·임베딩 클러스터링은 정상 동작하며, LLM 요약·분류 기능만 비활성화됩니다.
 
+TradingView Webhook을 사용할 경우 `.env`에 다음 값을 추가합니다:
+
+```
+TRADINGVIEW_WEBHOOK_SECRET=webhook-secret
+TRADINGVIEW_SIGNAL_VALID_MINUTES=1440
+TRADINGVIEW_WEBHOOK_PORT=8787
+```
+
 ### 3. 실행
 
 ```bash
-streamlit run dashboard.py
+run_dashboard.cmd
+```
+
+또는 명령줄에서 직접 실행하려면:
+
+```bash
+.venv\Scripts\python.exe -m streamlit run dashboard.py
 ```
 
 브라우저에서 `http://localhost:8504` 자동 열림 (`.streamlit/config.toml`에서 포트 변경 가능). 화면을 내리면 **"🎯 오늘의 단기 관찰 종목 TOP 10"** 섹션이 보이고, 종목 카드를 클릭하면 **점수 근거와 ⏱️ 단기 변동성 관찰 차트**가 표시됩니다.
+
+TradingView Webhook URL:
+
+```text
+http://localhost:8787/tradingview-webhook
+```
+
+지원 신호는 `BUY`, `SELL`, `NEUTRAL`이며, 기존 `UP`, `DOWN` 값은 내부에서 각각 `BUY`, `SELL`로 정규화됩니다.
 
 **CLI (뉴스 전용)**
 

@@ -1,3 +1,11 @@
 [server]
 port = 8504
 address = "localhost"
+
+[theme]
+base = "dark"
+primaryColor = "#00D9A3"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1A1D29"
+textColor = "#FAFAFA"
+font = "monospace"

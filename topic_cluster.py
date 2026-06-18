@@ -18,6 +18,7 @@ except ImportError:
 
 try:
     from sklearn.cluster import AgglomerativeClustering
+    from sklearn.feature_extraction.text import TfidfVectorizer
     _SK_AVAILABLE = True
 except ImportError:
     _SK_AVAILABLE = False
@@ -31,11 +32,35 @@ _DISTANCE_THRESHOLD = 0.45
 _model: "SentenceTransformer | None" = None
 
 
+def get_topic_cluster_status() -> dict[str, bool]:
+    """주제 클러스터링에 필요한 선택 의존성 설치 상태를 반환한다."""
+    return {
+        "sentence_transformers": _ST_AVAILABLE,
+        "scikit_learn": _SK_AVAILABLE,
+    }
+
+
 def _get_model() -> "SentenceTransformer":
     global _model
     if _model is None:
-        _model = SentenceTransformer(_MODEL_NAME)
+        _model = SentenceTransformer(_MODEL_NAME, local_files_only=True)
     return _model
+
+
+def _encode_titles(clean: list[str]) -> tuple[np.ndarray, float] | None:
+    if _ST_AVAILABLE:
+        try:
+            model = _get_model()
+            embeddings = model.encode(clean, normalize_embeddings=True, show_progress_bar=False)
+            return embeddings, _DISTANCE_THRESHOLD
+        except Exception as e:
+            print(f"[topic_cluster] sentence-transformers 모델 로드 실패, TF-IDF로 대체: {e}")
+
+    if not _SK_AVAILABLE:
+        return None
+
+    vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), min_df=1)
+    return vectorizer.fit_transform(clean).toarray(), 0.75
 
 
 def get_top_topics(titles: list[str], top_n: int = 3) -> list[dict]:
@@ -54,7 +79,7 @@ def get_top_topics(titles: list[str], top_n: int = 3) -> list[dict]:
         count     : 묶인 기사 수
         headlines : 해당 클러스터 전체 제목 리스트
     """
-    if not _ST_AVAILABLE or not _SK_AVAILABLE:
+    if not _SK_AVAILABLE:
         return []
 
     clean = [t.strip() for t in titles if t.strip()]
@@ -62,14 +87,16 @@ def get_top_topics(titles: list[str], top_n: int = 3) -> list[dict]:
         return []
 
     try:
-        model = _get_model()
-        embeddings = model.encode(clean, normalize_embeddings=True, show_progress_bar=False)
+        encoded = _encode_titles(clean)
+        if encoded is None:
+            return []
+        embeddings, distance_threshold = encoded
 
         clustering = AgglomerativeClustering(
             n_clusters=None,
             metric="cosine",
             linkage="average",
-            distance_threshold=_DISTANCE_THRESHOLD,
+            distance_threshold=distance_threshold,
         )
         labels = clustering.fit_predict(embeddings)
 

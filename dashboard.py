@@ -21,8 +21,16 @@ from hankyung_feed import fetch_hankyung_finance
 from market_data import load_market_data
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
 from scorer import score_candidates
-from topic_cluster import get_top_topics
+from topic_cluster import get_top_topics, get_topic_cluster_status
 from trade_signal import analyze_market_state
+from tradingview_signals import (
+    format_event_time,
+    format_price,
+    get_latest_signal_for_symbol,
+    reason_to_korean,
+    signal_label,
+    start_webhook_server,
+)
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -41,11 +49,11 @@ SUMMARY_PROMPT = """\
 위 헤드라인에서 '{keyword}' 관련 핵심 흐름을 한국어로 세 줄 요약하라."""
 
 BADGE_KEYWORD = (
-    '<span style="background:#28a745;color:#fff;border-radius:4px;'
+    '<span style="background:#00D9A3;color:#0E1117;border-radius:4px;'
     'padding:1px 7px;font-size:0.72rem;font-weight:600;margin-left:6px;">키워드</span>'
 )
 BADGE_LLM = (
-    '<span style="background:#1a73e8;color:#fff;border-radius:4px;'
+    '<span style="background:#4B8BFF;color:#0E1117;border-radius:4px;'
     'padding:1px 7px;font-size:0.72rem;font-weight:600;margin-left:6px;">LLM</span>'
 )
 
@@ -83,6 +91,11 @@ def cached_top_topics(titles: tuple[str, ...]) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def cached_topic_cluster_status() -> dict[str, bool]:
+    return get_topic_cluster_status()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_latest_backtest() -> tuple[pd.DataFrame, str] | None:
     """results/ 폴더에서 가장 최근 백테스트 CSV를 읽는다. 없으면 None."""
     files = sorted(
@@ -103,6 +116,16 @@ def cached_market_state(ticker: str) -> dict | None:
     return analyze_market_state(ticker)
 
 
+@st.cache_resource(show_spinner=False)
+def ensure_tradingview_webhook_server():
+    return start_webhook_server()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def cached_latest_tradingview_signal(ticker: str) -> dict | None:
+    return get_latest_signal_for_symbol(ticker)
+
+
 @st.cache_data(show_spinner=False)
 def get_summary(headlines: tuple[str, ...], keyword: str, model: str) -> str | None:
     try:
@@ -118,7 +141,7 @@ def get_summary(headlines: tuple[str, ...], keyword: str, model: str) -> str | N
 
 def sector_tag_html(sector: str) -> str:
     return (
-        f'<span style="background:#6c757d;color:#fff;border-radius:4px;'
+        f'<span style="background:#2A2E3D;color:#FAFAFA;border-radius:4px;'
         f'padding:1px 7px;font-size:0.72rem;margin-left:4px;">{sector}</span>'
     )
 
@@ -130,39 +153,51 @@ st.set_page_config(
     page_title="국내 주식 마켓 대시보드",
     page_icon="📈",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown("""
 <style>
+/* ── coing dark fintech design system ───────────────────────── */
+.block-container { padding-top: 2rem; padding-bottom: 2rem; }
+[data-testid="stMetric"] {
+    background: #1A1D29;
+    border: 1px solid #2A2E3D;
+    border-radius: 12px;
+    padding: 16px;
+}
+[data-testid="stMetricValue"] { font-size: 1.5rem; }
+h1, h2, h3 { letter-spacing: -0.02em; }
+
 .summary-card {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    border-left: 5px solid #f0a500;
-    border-radius: 10px;
+    background: #1A1D29;
+    border-left: 4px solid #00D9A3;
+    border-radius: 12px;
     padding: 24px 28px;
     margin-bottom: 24px;
-    color: #f0f0f0;
+    color: #FAFAFA;
     font-size: 1.08rem;
     line-height: 1.9;
 }
 .summary-card .card-title {
     font-size: 1.1rem;
     font-weight: 700;
-    color: #f0a500;
+    color: #00D9A3;
     margin-bottom: 14px;
     letter-spacing: 0.03em;
 }
 .news-item {
     padding: 10px 0;
-    border-bottom: 1px solid #e8e8e8;
+    border-bottom: 1px solid #2A2E3D;
 }
 .news-time {
     font-size: 0.78rem;
-    color: #888;
+    color: #8B92A6;
     margin-bottom: 3px;
 }
 .news-link a {
     font-size: 0.98rem;
-    color: #1a73e8;
+    color: #00D9A3;
     text-decoration: none;
     font-weight: 500;
 }
@@ -170,29 +205,29 @@ st.markdown("""
     text-decoration: underline;
 }
 .candidate-card {
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-left: 4px solid #1a73e8;
-    border-radius: 8px;
+    background: #1A1D29;
+    border: 1px solid #2A2E3D;
+    border-left: 4px solid #00D9A3;
+    border-radius: 12px;
     padding: 14px 18px;
     margin-bottom: 10px;
 }
 .candidate-score {
     display: inline-block;
-    background: #1a73e8;
-    color: #fff;
+    background: #00D9A3;
+    color: #0E1117;
     border-radius: 20px;
     padding: 2px 12px;
     font-size: 0.85rem;
     font-weight: 700;
 }
 .reason-item {
-    color: #2e7d32;
+    color: #00D9A3;
     font-size: 0.9rem;
     margin: 2px 0;
 }
 .risk-item {
-    color: #e65100;
+    color: #FFB020;
     font-size: 0.9rem;
     margin: 2px 0;
 }
@@ -323,6 +358,11 @@ if auto_refresh:
     st_autorefresh(interval=60_000, key="price_refresh")
 
 
+_tv_webhook = ensure_tradingview_webhook_server()
+if not _tv_webhook.running:
+    st.caption(f"TradingView Webhook 서버를 시작하지 못했습니다: {_tv_webhook.message}")
+
+
 # ── 섹터 필터 적용 ────────────────────────────────────────────
 
 if selected_sector == "전체":
@@ -340,6 +380,21 @@ with st.spinner("시장 데이터 로딩 중..."):
 # ═══════════════════ 메인 화면 ═══════════════════════════════
 
 st.title("📈 국내 주식 마켓 대시보드")
+
+
+# ── 시장 요약 메트릭 행 (상단) ───────────────────────────────
+
+if _market_df is not None:
+    with st.container(border=True):
+        _ov_up  = int((_market_df["등락률"] > 0).sum())
+        _ov_dn  = int((_market_df["등락률"] < 0).sum())
+        _ov_avg = _market_df["등락률"].mean()
+        _ov_amt = _market_df["거래대금"].sum() / 1e12  # 조원
+        _ov1, _ov2, _ov3, _ov4 = st.columns(4)
+        _ov1.metric("📈 상승", f"{_ov_up:,}종목")
+        _ov2.metric("📉 하락", f"{_ov_dn:,}종목")
+        _ov3.metric("평균 등락률", f"{_ov_avg:+.2f}%")
+        _ov4.metric("총 거래대금", f"{_ov_amt:,.1f}조원")
 
 
 # ── 후보 종목 (그리드, 항상 표시) ───────────────────────────
@@ -388,28 +443,69 @@ if _market_df is not None:
             st.caption("카드를 클릭하면 상세가 표시됩니다")
         else:
             change_pct   = sel["등락률"]
-            change_color = "#e03131" if change_pct >= 0 else "#1971c2"
+            change_color = "#FF4B5C" if change_pct >= 0 else "#4B8BFF"
             change_arrow = "▲" if change_pct >= 0 else "▼"
-            st.markdown(
-                f"**{sel['종목명']}** &nbsp; {sel['현재가']:,}원 &nbsp; "
-                f'<span style="color:{change_color};font-weight:700;">'
-                f"{change_arrow} {abs(change_pct):.2f}%</span> &nbsp; "
-                f"거래대금 {sel['거래대금(억원)']:,}억원 &nbsp; "
-                f'<span class="candidate-score">점수 {sel["점수"]}</span>',
-                unsafe_allow_html=True,
-            )
+            with st.container(border=True):
+                st.markdown(f"### {sel['종목명']}")
+                _d1, _d2, _d3, _d4 = st.columns(4)
+                _d1.metric("현재가", f"{sel['현재가']:,}원")
+                _d2.markdown(
+                    '<div style="font-size:0.8rem;color:#8B92A6;">등락률</div>'
+                    f'<div style="font-size:1.5rem;font-weight:700;color:{change_color};">'
+                    f"{change_arrow} {abs(change_pct):.2f}%</div>",
+                    unsafe_allow_html=True,
+                )
+                _d3.metric("거래대금", f"{sel['거래대금(억원)']:,}억원")
+                _d4.markdown(
+                    '<div style="font-size:0.8rem;color:#8B92A6;">점수</div>'
+                    f'<div style="font-size:1.5rem;font-weight:700;color:#00D9A3;">{sel["점수"]}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("#### 📡 최신 기술 신호")
+            tv_signal = cached_latest_tradingview_signal(sel_ticker)
+            if tv_signal is None:
+                st.info("현재 이 종목에 수신된 TradingView 신호가 없습니다.")
+            elif tv_signal.get("is_expired"):
+                st.info(
+                    "⚪ 신호 만료\n\n"
+                    "마지막 신호가 유효 시간 범위를 지났습니다."
+                )
+            else:
+                normalized_signal = tv_signal["signal_normalized"]
+                label, label_color = signal_label(normalized_signal)
+                if normalized_signal == "NEUTRAL":
+                    st.info(
+                        "⚪ 중립\n\n"
+                        "현재 유효한 기술적 신호가 없습니다.\n\n"
+                        f"발생 시각: {format_event_time(tv_signal['event_time_utc'])}\n\n"
+                        f"시간봉: {tv_signal.get('timeframe') or '-'}분\n\n"
+                        "출처: TradingView"
+                    )
+                else:
+                    with st.container(border=True):
+                        st.markdown(
+                            f'<div style="font-weight:700;color:{label_color};font-size:1.05rem;">'
+                            f'{label}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(reason_to_korean(tv_signal.get("reason")))
+                        st.markdown(f"발생 가격: {format_price(tv_signal.get('price'))}")
+                        st.markdown(f"시간봉: {tv_signal.get('timeframe') or '-'}분")
+                        st.markdown(f"발생 시각: {format_event_time(tv_signal['event_time_utc'])}")
+                        st.markdown("출처: TradingView")
 
             col_r, col_w = st.columns(2)
             with col_r:
                 for r in sel["후보이유"]:
-                    score_str = f' <span style="color:#2e7d32;font-weight:700;">+{r[1]}</span>' if r[1] > 0 else ""
+                    score_str = f' <span style="color:#00D9A3;font-weight:700;">+{r[1]}</span>' if r[1] > 0 else ""
                     st.markdown(
                         f'<div class="reason-item">✅ {r[0]}{score_str}</div>',
                         unsafe_allow_html=True,
                     )
             with col_w:
                 for r in sel["주의점"]:
-                    score_str = f' <span style="color:#e65100;font-weight:700;">{r[1]}</span>' if r[1] != 0 else ""
+                    score_str = f' <span style="color:#FFB020;font-weight:700;">{r[1]}</span>' if r[1] != 0 else ""
                     st.markdown(
                         f'<div class="risk-item">⚠️ {r[0]}{score_str}</div>',
                         unsafe_allow_html=True,
@@ -424,7 +520,7 @@ if _market_df is not None:
                 st.info("일봉 데이터가 부족해 지표 상태를 계산할 수 없습니다.")
             else:
                 _sig = timing["state"]
-                _sig_color = {"상방 조건 우세": "#e03131", "하방 리스크 우세": "#1971c2"}.get(_sig, "#6c757d")
+                _sig_color = {"상방 조건 우세": "#FF4B5C", "하방 리스크 우세": "#4B8BFF"}.get(_sig, "#2A2E3D")
                 st.markdown(
                     f'<span style="background:{_sig_color};color:#fff;border-radius:20px;'
                     f'padding:3px 14px;font-size:0.9rem;font-weight:700;">'
@@ -448,11 +544,11 @@ if _market_df is not None:
                 _bars = timing["bars"]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=_bars.index, y=_bars["Close"], name="종가",
-                                         line=dict(color="#222", width=1.6)))
+                                         line=dict(color="#FAFAFA", width=1.6)))
                 fig.add_trace(go.Scatter(x=_bars.index, y=_bars["MA5"], name="MA5",
-                                         line=dict(color="#f0a500", width=1, dash="dot")))
+                                         line=dict(color="#FFC857", width=1, dash="dot")))
                 fig.add_trace(go.Scatter(x=_bars.index, y=_bars["MA20"], name="MA20",
-                                         line=dict(color="#1a73e8", width=1)))
+                                         line=dict(color="#00D9A3", width=1)))
 
                 _ups   = [e for e in timing["events"] if e["side"] == "상방"]
                 _downs = [e for e in timing["events"] if e["side"] == "하방"]
@@ -460,7 +556,7 @@ if _market_df is not None:
                     fig.add_trace(go.Scatter(
                         x=[e["date"] for e in _ups], y=[e["price"] for e in _ups],
                         mode="markers", name="상방 전환 이벤트",
-                        marker=dict(symbol="triangle-up", size=12, color="#e03131"),
+                        marker=dict(symbol="triangle-up", size=12, color="#FF4B5C"),
                         text=[e["label"] for e in _ups],
                         hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>상방</extra>",
                     ))
@@ -468,16 +564,16 @@ if _market_df is not None:
                     fig.add_trace(go.Scatter(
                         x=[e["date"] for e in _downs], y=[e["price"] for e in _downs],
                         mode="markers", name="하방 전환 이벤트",
-                        marker=dict(symbol="triangle-down", size=12, color="#1971c2"),
+                        marker=dict(symbol="triangle-down", size=12, color="#4B8BFF"),
                         text=[e["label"] for e in _downs],
                         hovertemplate="%{x|%Y-%m-%d}<br>%{text}<br>%{y:,.0f}원<extra>하방</extra>",
                     ))
 
                 fig.add_hline(y=_lv["하단 기준선(20일 저가)"], line_dash="dash",
-                              line_color="#2e7d32", line_width=1,
+                              line_color="#00D9A3", line_width=1,
                               annotation_text="하단 기준선", annotation_position="bottom left")
                 fig.add_hline(y=_lv["상단 기준선(60일 고가)"], line_dash="dash",
-                              line_color="#e65100", line_width=1,
+                              line_color="#FFB020", line_width=1,
                               annotation_text="상단 기준선", annotation_position="top left")
 
                 fig.update_layout(
@@ -485,6 +581,11 @@ if _market_df is not None:
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                     xaxis_title=None, yaxis_title=None,
                     hovermode="x unified",
+                    paper_bgcolor="#0E1117",
+                    plot_bgcolor="#1A1D29",
+                    font=dict(color="#FAFAFA", family="monospace"),
+                    xaxis=dict(gridcolor="#2A2E3D", showgrid=True),
+                    yaxis=dict(gridcolor="#2A2E3D", showgrid=True),
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.caption(
@@ -544,51 +645,53 @@ st.divider()
 # ── 시장 데이터 탭 ────────────────────────────────────────────
 
 if _market_df is not None:
-    tab_up, tab_amount, tab_cap = st.tabs(
-        ["🔥 등락률 TOP", "💰 거래대금 TOP 10", "🏦 시가총액 TOP 10"]
-    )
+    st.subheader("📊 시장 데이터")
+    with st.container(border=True):
+        tab_up, tab_amount, tab_cap = st.tabs(
+            ["🔥 등락률 TOP", "💰 거래대금 TOP 10", "🏦 시가총액 TOP 10"]
+        )
 
-    with tab_up:
-        col_up, col_dn = st.columns(2)
-        top_up = _market_df.nlargest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
-        top_dn = _market_df.nsmallest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
+        with tab_up:
+            col_up, col_dn = st.columns(2)
+            top_up = _market_df.nlargest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
+            top_dn = _market_df.nsmallest(5, "등락률")[["종목명", "현재가", "등락률"]].reset_index(drop=True)
 
-        with col_up:
-            st.markdown("**상승률 TOP 5**")
-            for _, row in top_up.iterrows():
-                pct = row["등락률"]
-                st.markdown(
-                    f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
-                    f'<span style="color:#e03131;font-weight:700;">▲ {pct:.2f}%</span>',
-                    unsafe_allow_html=True,
-                )
+            with col_up:
+                st.markdown("**상승률 TOP 5**")
+                for _, row in top_up.iterrows():
+                    pct = row["등락률"]
+                    st.markdown(
+                        f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
+                        f'<span style="color:#FF4B5C;font-weight:700;">▲ {pct:.2f}%</span>',
+                        unsafe_allow_html=True,
+                    )
 
-        with col_dn:
-            st.markdown("**하락률 TOP 5**")
-            for _, row in top_dn.iterrows():
-                pct = row["등락률"]
-                st.markdown(
-                    f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
-                    f'<span style="color:#1971c2;font-weight:700;">▼ {abs(pct):.2f}%</span>',
-                    unsafe_allow_html=True,
-                )
+            with col_dn:
+                st.markdown("**하락률 TOP 5**")
+                for _, row in top_dn.iterrows():
+                    pct = row["등락률"]
+                    st.markdown(
+                        f"**{row['종목명']}** &nbsp; {int(row['현재가']):,}원 &nbsp; "
+                        f'<span style="color:#4B8BFF;font-weight:700;">▼ {abs(pct):.2f}%</span>',
+                        unsafe_allow_html=True,
+                    )
 
-    with tab_amount:
-        top_amount = _market_df.nlargest(10, "거래대금")[["종목명", "거래대금", "등락률"]].copy()
-        top_amount.insert(0, "순위", range(1, 11))
-        top_amount["거래대금(억원)"] = (top_amount["거래대금"] / 1e8).round(0).astype(int)
-        top_amount["등락률"] = top_amount["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
-        top_amount = top_amount[["순위", "종목명", "거래대금(억원)", "등락률"]].reset_index(drop=True)
-        st.dataframe(top_amount, use_container_width=True, hide_index=True)
+        with tab_amount:
+            top_amount = _market_df.nlargest(10, "거래대금")[["종목명", "거래대금", "등락률"]].copy()
+            top_amount.insert(0, "순위", range(1, 11))
+            top_amount["거래대금(억원)"] = (top_amount["거래대금"] / 1e8).round(0).astype(int)
+            top_amount["등락률"] = top_amount["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
+            top_amount = top_amount[["순위", "종목명", "거래대금(억원)", "등락률"]].reset_index(drop=True)
+            st.dataframe(top_amount, use_container_width=True, hide_index=True)
 
-    with tab_cap:
-        top_cap = _market_df.nlargest(10, "시가총액")[["종목명", "시가총액", "현재가", "등락률"]].copy()
-        top_cap.insert(0, "순위", range(1, 11))
-        top_cap["시총(조원)"] = (top_cap["시가총액"] / 1e12).round(2)
-        top_cap["현재가"] = top_cap["현재가"].astype(int).map(lambda x: f"{x:,}원")
-        top_cap["등락률"] = top_cap["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
-        top_cap = top_cap[["순위", "종목명", "시총(조원)", "현재가", "등락률"]].reset_index(drop=True)
-        st.dataframe(top_cap, use_container_width=True, hide_index=True)
+        with tab_cap:
+            top_cap = _market_df.nlargest(10, "시가총액")[["종목명", "시가총액", "현재가", "등락률"]].copy()
+            top_cap.insert(0, "순위", range(1, 11))
+            top_cap["시총(조원)"] = (top_cap["시가총액"] / 1e12).round(2)
+            top_cap["현재가"] = top_cap["현재가"].astype(int).map(lambda x: f"{x:,}원")
+            top_cap["등락률"] = top_cap["등락률"].map(lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%")
+            top_cap = top_cap[["순위", "종목명", "시총(조원)", "현재가", "등락률"]].reset_index(drop=True)
+            st.dataframe(top_cap, use_container_width=True, hide_index=True)
 
     st.divider()
 
@@ -624,7 +727,7 @@ with col_left:
 
 with col_right:
     st.subheader("📌 인기 주제 TOP 3")
-    st.caption("sentence-transformers 임베딩으로 유사 헤드라인을 묶어 가장 많이 다뤄진 주제를 추립니다.")
+    st.caption("헤드라인 유사도를 계산해 가장 많이 다뤄진 주제를 추립니다.")
     if not articles:
         st.info("기사가 없어 주제 분석을 건너뜁니다.")
     else:
@@ -632,10 +735,23 @@ with col_right:
             topics = cached_top_topics(tuple(a.get("title", "") for a in articles))
 
         if not topics:
-            st.info(
-                "`sentence-transformers` 또는 `scikit-learn`이 설치되지 않았습니다.\n\n"
-                "```\npip install sentence-transformers scikit-learn\n```"
-            )
+            status = cached_topic_cluster_status()
+            missing = [
+                name
+                for name, installed in (
+                    ("scikit-learn", status["scikit_learn"]),
+                )
+                if not installed
+            ]
+            if missing:
+                st.info(
+                    f"`{', '.join(missing)}` 패키지가 설치되지 않았습니다.\n\n"
+                    "```\npip install scikit-learn\n```"
+                )
+            else:
+                st.info(
+                    "주제 분석 결과가 비어 있습니다. 기사 수가 적거나 서로 비슷한 헤드라인이 부족할 수 있습니다."
+                )
         else:
             for topic in topics:
                 others = [h for h in topic["headlines"] if h != topic["rep_title"]]
@@ -645,19 +761,19 @@ with col_right:
                     _html.escape(h) for h in others_preview
                 )
                 if overflow > 0:
-                    others_html += f" &nbsp;<span style='color:#aaa;'>외 {overflow}건</span>"
+                    others_html += f" &nbsp;<span style='color:#8B92A6;'>외 {overflow}건</span>"
 
                 rep = _html.escape(topic["rep_title"])
                 st.markdown(f"""
-<div style="border-left:4px solid #f0a500;padding:12px 18px;margin-bottom:10px;
-            background:#fffdf5;border-radius:6px;">
-  <div style="font-weight:700;font-size:0.88rem;color:#888;margin-bottom:4px;">
+<div style="border-left:4px solid #00D9A3;padding:12px 18px;margin-bottom:10px;
+            background:#1A1D29;border:1px solid #2A2E3D;border-radius:12px;">
+  <div style="font-weight:700;font-size:0.88rem;color:#8B92A6;margin-bottom:4px;">
     {topic['rank']}위 · {topic['count']}건
   </div>
-  <div style="font-size:1.0rem;color:#222;font-weight:600;margin-bottom:{'6px' if others_html else '0'};">
+  <div style="font-size:1.0rem;color:#FAFAFA;font-weight:600;margin-bottom:{'6px' if others_html else '0'};">
     📌 {rep}
   </div>
-  {'<div style="font-size:0.82rem;color:#999;line-height:1.8;">' + others_html + '</div>' if others_html else ''}
+  {'<div style="font-size:0.82rem;color:#8B92A6;line-height:1.8;">' + others_html + '</div>' if others_html else ''}
 </div>
 """, unsafe_allow_html=True)
 
@@ -684,7 +800,7 @@ with st.expander(f"📋 뉴스 헤드라인 ({len(articles)}건)", expanded=Fals
             badge = BADGE_KEYWORD if method == "키워드" else BADGE_LLM
             stag  = sector_tag_html(sector) if show_sector_tag else ""
             press_badge = (
-                f'<span style="background:#e8f0fe;color:#1a73e8;border-radius:4px;'
+                f'<span style="background:rgba(0,217,163,0.12);color:#00D9A3;border-radius:4px;'
                 f'padding:1px 7px;font-size:0.72rem;font-weight:600;margin-right:4px;">'
                 f'{press}</span>'
                 if press else ""
@@ -709,3 +825,4 @@ st.caption(
     "ℹ️ 이 대시보드는 공개 시장 데이터와 사용자가 정의한 기술적 조건을 시각화하는 학습용 도구입니다. "
     "특정 종목의 매수·매도 추천, 수익 예측, 자동매매 기능을 제공하지 않습니다."
 )
+st.caption("기술적 지표 기반 신호이며 실제 매수·매도 권유가 아닙니다.")
