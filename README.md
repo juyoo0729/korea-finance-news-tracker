@@ -141,6 +141,7 @@ korea-finance-news-tracker/
 ├── backtest.py               # 과거 후보 재현과 벤치마크 비교
 ├── topic_cluster.py          # 임베딩 + 엔티티 그래프 주제 묶기
 ├── web_safety.py             # 외부 HTML 문자열·URL 검증
+├── order_safety.py           # 세션 주문 시도 누적·재전송 차단
 ├── toss_client.py            # 토스 시세·자산·주문
 ├── bithumb_client.py         # 빗썸 시세·자산·주문
 ├── tradingview_signals.py    # TradingView Webhook 수신·신호 조회

@@ -23,6 +23,7 @@ from classifier import HybridClassifier
 from hankyung_feed import fetch_hankyung_finance
 from market_data import load_market_data, market_snapshot_key
 from naver_finance_feed import fetch_naver_finance_news, fetch_naver_stock_news
+from order_safety import record_order_attempt, was_order_attempted
 from scorer import score_candidates
 from topic_cluster import get_top_topics, get_topic_cluster_status
 from trade_signal import analyze_market_state
@@ -600,8 +601,13 @@ with st.container(border=True):
                         "주문 계좌",
                         list(_account_options),
                         key="trade_account_s",
+                        index=None,
+                        placeholder="주문 계좌를 선택하세요",
                     )
-                    _account_seq = _account_options[_account_label]
+                    if _account_label is not None:
+                        _account_seq = _account_options[_account_label]
+                    else:
+                        _account_label = "선택하지 않음"
                 else:
                     st.error("주문 가능한 토스 계좌 식별 정보를 찾지 못했습니다.")
             else:
@@ -635,7 +641,7 @@ with st.container(border=True):
         _order_sig = hashlib.sha256(_order_payload.encode("utf-8")).hexdigest()[:32]
         _unlocked = st.checkbox("🔓 이 주문의 거래 잠금 해제", value=False, key=f"trade_unlock_{_order_sig}")
         _confirm = st.checkbox("위 주문 내용을 확인했습니다", key=f"trade_confirm_{_order_sig}")
-        _already_attempted = st.session_state.get("last_attempted_order") == _order_sig
+        _already_attempted = was_order_attempted(st.session_state, _order_sig)
         if _already_attempted:
             st.info(
                 "같은 날짜·계좌·종목·방향·수량·가격의 주문을 이미 전송했습니다. "
@@ -650,7 +656,7 @@ with st.container(border=True):
             and not _already_attempted
         )
         if st.button("🚀 주문 실행", type="primary", disabled=not _ready, key="trade_go"):
-            st.session_state["last_attempted_order"] = _order_sig
+            record_order_attempt(st.session_state, _order_sig)
             with st.spinner("주문 전송 중..."):
                 if _kind == "stock":
                     from toss_client import place_stock_order

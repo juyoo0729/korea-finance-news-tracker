@@ -110,12 +110,15 @@ def place_order(
     tok = _jwt(params)
     if not tok:
         return {"ok": False, "status": 0, "data": {"error": "API 키 미설정"}}
-    r = requests.post(
-        f"{_BASE}/v1/orders",
-        json=params,
-        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-        timeout=5,
-    )
+    try:
+        r = requests.post(
+            f"{_BASE}/v1/orders",
+            json=params,
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+            timeout=5,
+        )
+    except requests.RequestException as exc:
+        return {"ok": False, "status": 0, "data": {"error": str(exc)}}
     try:
         data = r.json()
     except Exception:
