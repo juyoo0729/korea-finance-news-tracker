@@ -13,9 +13,12 @@ scorer.py — 2단계 룰 기반 후보 종목 점수·설명 생성
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import logging
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 try:
     import FinanceDataReader as fdr
@@ -102,6 +105,8 @@ def _compute_rsi(closes: pd.Series, period: int = 14) -> float:
     avg_loss = losses.rolling(period).mean().iloc[-1]
     if pd.isna(avg_gain) or pd.isna(avg_loss):
         return float("nan")
+    if avg_gain == 0 and avg_loss == 0:
+        return 50.0
     if avg_loss == 0:
         return 100.0
     return round(100 - 100 / (1 + avg_gain / avg_loss), 2)
@@ -132,6 +137,14 @@ def _stage1_score(row) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]
     elif change_pct >= RATE_CAUTION_MAX:
         score -= 15
         risks.append((f"급등 과열 ({change_pct:.1f}%) — 단기 변동성 확대 구간", -15))
+    elif change_pct <= -10:
+        score -= 25
+        risks.append((f"당일 급락 ({change_pct:.1f}%) — 변동성·추가 하락 위험", -25))
+    elif change_pct <= -5:
+        score -= 15
+        risks.append((f"당일 큰 폭 하락 ({change_pct:.1f}%) — 반전 확인 필요", -15))
+    elif change_pct < 0:
+        risks.append((f"당일 하락 ({change_pct:.1f}%)", 0))
 
     # 거래대금 점수
     amount_eok = amount / 1e8
@@ -158,25 +171,57 @@ def _default_bars(ticker: str) -> pd.DataFrame | None:
 def _stage2_enrich(
     ticker: str,
     bars_provider=None,
-) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]]]:
+) -> tuple[int, list[tuple[str, int]], list[tuple[str, int]], dict]:
     """일봉을 가져와 추가 점수·이유·주의점을 반환한다.
 
     bars_provider: 티커 → 일봉 DataFrame(Close/Volume 컬럼, 마지막 행이 "기준일")을
                    반환하는 콜러블. None이면 오늘 기준 fdr 조회(기존 동작).
                    backtest.py가 과거 시점 재현(look-ahead 방지)에 사용한다.
 
-    네트워크 오류나 데이터 부족 등 어떤 이유로든 실패하면 (0, [], [])을 반환한다.
-    호출자는 실패해도 1단계 점수만으로 그대로 처리하면 된다.
+    점수·이유·주의점과 함께 완료 상태·일봉 기준일·오류 정보를 반환한다.
     """
+    meta = {
+        "2단계완료": False,
+        "2단계상태": "데이터 없음",
+        "2단계오류": "",
+        "일봉기준일": "",
+        "수집일봉기준일": "",
+        "미완성봉가능": False,
+    }
     try:
         df = (bars_provider or _default_bars)(ticker)
 
-        # 20일 이동평균 + RSI(14) 계산에 최소 21개 필요
-        if df is None or len(df) < 21:
-            return 0, [], []
+        if df is None:
+            return 0, [], [], meta
+        if len(df) < 21:
+            meta["2단계상태"] = "데이터 부족"
+            meta["2단계오류"] = f"일봉 {len(df)}개 (최소 21개 필요)"
+            return 0, [], [], meta
+        missing = {"Close", "Volume"} - set(df.columns)
+        if missing:
+            raise KeyError(f"필수 일봉 컬럼 누락: {', '.join(sorted(missing))}")
 
-        closes  = df["Close"].astype(float)
-        volumes = df["Volume"].astype(float)
+        try:
+            latest_bar = pd.Timestamp(df.index[-1])
+            meta["수집일봉기준일"] = latest_bar.strftime("%Y-%m-%d")
+            now = datetime.now()
+            meta["미완성봉가능"] = bool(
+                latest_bar.date() == now.date()
+                and now.weekday() < 5
+                and (now.hour, now.minute) < (15, 40)
+            )
+        except (TypeError, ValueError):
+            meta["수집일봉기준일"] = str(df.index[-1])
+
+        analysis_df = df.iloc[:-1] if meta["미완성봉가능"] else df
+        if len(analysis_df) < 21:
+            meta["2단계상태"] = "데이터 부족"
+            meta["2단계오류"] = f"완성 일봉 {len(analysis_df)}개 (최소 21개 필요)"
+            return 0, [], [], meta
+        meta["일봉기준일"] = pd.Timestamp(analysis_df.index[-1]).strftime("%Y-%m-%d")
+
+        closes  = analysis_df["Close"].astype(float)
+        volumes = analysis_df["Volume"].astype(float)
 
         score:   int       = 0
         reasons: list[str] = []
@@ -198,6 +243,8 @@ def _stage2_enrich(
                 reasons.append((
                     f"거래량 증가 ({vol_ratio:.1f}배 — 20일 평균 {avg_vol_20:,.0f}주 대비)", 15
                 ))
+        if meta["미완성봉가능"]:
+            reasons.append(("장중 미완성 최신봉 제외 후 완성봉으로 분석", 0))
 
         # ── 20일 이동평균선 위/아래 ───────────────────────────────
         ma20          = closes.iloc[-21:-1].mean()
@@ -246,7 +293,7 @@ def _stage2_enrich(
                 # 뚜렷하게 하락하던 중 가속도 음→양 전환 → 바닥 변곡점
                 score += 20
                 reasons.append((
-                    f"하락 추세 중 가속도 양전환 — 바닥 변곡점 조건 발생"
+                    f"하락 추세 중 가속도 양전환 (바닥 변곡점 관찰 조건)"
                     f" (속도 {vel_pct:+.2f}%/일)", 20
                 ))
             elif inflection and vel_avg < 0:
@@ -286,15 +333,24 @@ def _stage2_enrich(
                 else:
                     reasons.append((f"20일 모멘텀 중립 ({momentum_pct:+.1f}%)", 0))
 
-        return score, reasons, risks
+        meta["2단계완료"] = True
+        meta["2단계상태"] = "완료"
+        return score, reasons, risks, meta
 
-    except Exception:
-        return 0, [], []
+    except Exception as exc:
+        logger.warning("일봉 분석 실패 ticker=%s: %s", ticker, exc)
+        meta["2단계상태"] = "조회 실패"
+        meta["2단계오류"] = f"{type(exc).__name__}: {exc}"
+        return 0, [], [], meta
 
 
 # ── 공개 인터페이스 ───────────────────────────────────────────────
 
-def score_candidates(df: pd.DataFrame, bars_provider=None) -> list[dict]:
+def score_candidates(
+    df: pd.DataFrame,
+    bars_provider=None,
+    snapshot_date: str | None = None,
+) -> list[dict]:
     """2단계 룰로 후보 종목을 선정하고 최종 상위 10개를 반환한다.
 
     Parameters
@@ -303,6 +359,7 @@ def score_candidates(df: pd.DataFrame, bars_provider=None) -> list[dict]:
          필요 컬럼: 티커, 종목명, 현재가, 등락률, 거래대금, 시가총액, 거래량
     bars_provider : 티커 → 일봉 DataFrame을 반환하는 콜러블 (선택).
          None이면 오늘 기준 fdr 조회. backtest.py가 과거 시점 재현에 사용.
+    snapshot_date : 1단계 시장 스냅샷의 기준 거래일(선택).
 
     Returns
     -------
@@ -324,6 +381,7 @@ def score_candidates(df: pd.DataFrame, bars_provider=None) -> list[dict]:
             continue
 
         amount = float(row.get("거래대금", 0) or 0)
+        market_cap = float(row.get("시가총액", 0) or 0)
         stage1.append({
             "티커":          str(row.get("티커", "")),
             "종목명":        str(row.get("종목명", "")),
@@ -333,17 +391,47 @@ def score_candidates(df: pd.DataFrame, bars_provider=None) -> list[dict]:
             "점수":          s1,
             "후보이유":      reasons,
             "주의점":        risks,
+            "_거래대금원":   amount,
+            "_시가총액원":   market_cap,
         })
 
-    stage1.sort(key=lambda x: x["점수"], reverse=True)
+    stage1.sort(key=lambda x: (
+        -x["점수"], -x["_거래대금원"], -x["_시가총액원"], x["티커"]
+    ))
     top30 = stage1[:STAGE1_TOP_N]
 
     # ── 2단계: 일봉 보강 (top 30에만 적용) ───────────────────────
     for c in top30:
-        s2, s2_reasons, s2_risks = _stage2_enrich(c["티커"], bars_provider)
+        s2, s2_reasons, s2_risks, meta = _stage2_enrich(c["티커"], bars_provider)
         c["점수"]    += s2
         c["후보이유"] += s2_reasons
         c["주의점"]   += s2_risks
+        c.update(meta)
+        c["스냅샷기준일"] = snapshot_date or ""
+        c["기준일불일치"] = bool(
+            snapshot_date
+            and c["일봉기준일"]
+            and snapshot_date != c["일봉기준일"]
+        )
+        reason_text = " ".join(text for text, _ in c["후보이유"])
+        if "과매도" in reason_text or "하락 추세 중 가속도 양전환" in reason_text:
+            c["관찰유형"] = "과매도 반전 관찰"
+        elif "거래량 급증" in reason_text or "거래량 증가" in reason_text:
+            c["관찰유형"] = "거래량 이상 관찰"
+        elif any(keyword in reason_text for keyword in ("상승", "모멘텀", "이동평균선 상회")):
+            c["관찰유형"] = "추세 지속 관찰"
+        else:
+            c["관찰유형"] = "조건 충족 관찰"
 
-    top30.sort(key=lambda x: x["점수"], reverse=True)
-    return top30[:FINAL_TOP_N]
+    top30.sort(key=lambda x: (
+        -x["점수"], not x["2단계완료"], -x["_거래대금원"],
+        -x["_시가총액원"], x["티커"],
+    ))
+    result = top30[:FINAL_TOP_N]
+    completed_count = sum(candidate["2단계완료"] for candidate in top30)
+    for candidate in result:
+        candidate["2단계완료수"] = completed_count
+        candidate["2단계대상수"] = len(top30)
+        candidate.pop("_거래대금원", None)
+        candidate.pop("_시가총액원", None)
+    return result

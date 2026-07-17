@@ -1,6 +1,6 @@
 beautifulsoup4
+anthropic
 feedparser==6.0.12
-openai
 plotly
 pyarrow
 python-dotenv
