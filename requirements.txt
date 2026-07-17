@@ -5,6 +5,8 @@ plotly
 pyarrow
 python-dotenv
 finance-datareader
+numpy
+pandas
 pykrx
 pyyaml
 requests

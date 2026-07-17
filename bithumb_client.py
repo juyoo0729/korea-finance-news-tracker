@@ -88,8 +88,14 @@ def _jwt(params: dict | None = None) -> str | None:
     return (signing + b"." + sig).decode()
 
 
-def place_order(market: str, side: str, ord_type: str,
-                volume: str | None = None, price: str | None = None) -> dict:
+def place_order(
+    market: str,
+    side: str,
+    ord_type: str,
+    volume: str | None = None,
+    price: str | None = None,
+    identifier: str | None = None,
+) -> dict:
     """빗썸 주문. side: bid(매수)/ask(매도), ord_type: limit/price(시장가매수)/market(시장가매도).
 
     반환: {"ok": bool, "status": int, "data": dict}
@@ -99,6 +105,8 @@ def place_order(market: str, side: str, ord_type: str,
         params["volume"] = str(volume)
     if price is not None:
         params["price"] = str(price)
+    if identifier:
+        params["identifier"] = str(identifier)
     tok = _jwt(params)
     if not tok:
         return {"ok": False, "status": 0, "data": {"error": "API 키 미설정"}}

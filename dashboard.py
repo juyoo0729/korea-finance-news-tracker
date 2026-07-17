@@ -8,6 +8,7 @@ dashboard.py — 한경 금융 뉴스 Streamlit 대시보드
 import atexit
 from datetime import datetime
 import hashlib
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv()
 from pathlib import Path
@@ -37,6 +38,7 @@ from tradingview_signals import (
 # from price_fetcher import fetch_price  # 관심종목 주가 비활성화
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+KST = ZoneInfo("Asia/Seoul")
 # COLS_PER_ROW = 4  # 관심종목 카드 레이아웃 비활성화
 
 SUMMARY_PROMPT = """\
@@ -148,6 +150,13 @@ def cached_stock_assets() -> dict | None:
     """토스 주식 자산 (30초 캐시)."""
     from toss_client import get_stock_assets
     return get_stock_assets()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def cached_stock_accounts() -> list[dict]:
+    """토스 주문 계좌 목록(30초 캐시)."""
+    from toss_client import get_stock_accounts
+    return get_stock_accounts()
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -518,7 +527,11 @@ def _fmt_won(x: float) -> str:
 
 st.subheader("🔎 검색 & 주문")
 with st.container(border=True):
-    st.warning("⚠️ 실제 주문이 체결되는 기능입니다. 아래 **거래 잠금 해제**를 켜고, 주문 내용 **확인 체크**까지 해야 주문 버튼이 활성화됩니다.")
+    st.warning(
+        "⚠️ API 키에 거래 권한이 있으면 실제 주문이 접수될 수 있습니다. "
+        "주문 계좌·종목·방향·수량·가격을 확인한 뒤 거래 잠금과 확인 체크를 켜세요. "
+        "지정가 주문의 체결 여부는 증권사·거래소 앱에서 별도로 확인해야 합니다."
+    )
     _unlocked = False
 
     _mkt = st.radio("시장", ["주식 (토스)", "코인 (빗썸)"], horizontal=True, key="trade_mkt")
@@ -562,8 +575,37 @@ with st.container(border=True):
         _safe_name = _html.escape(str(_name))
         st.markdown(f"### {_safe_name}  ·  현재가 {_fmt_won(_px)}")
         _side_kr = st.radio("주문 방향", ["매수", "매도"], horizontal=True, key="trade_side")
+        _account_seq = None
+        _account_label = "빗썸 API 키 연결 계정"
 
         if _kind == "stock":
+            _accounts = cached_stock_accounts()
+            if _accounts:
+                _account_options = {}
+                for _account in _accounts:
+                    _seq = _account.get("accountSeq")
+                    if _seq is None:
+                        continue
+                    _account_name = str(
+                        _account.get("accountName")
+                        or _account.get("name")
+                        or "토스증권 계좌"
+                    )
+                    _account_number = str(_account.get("accountNumber") or "")
+                    _suffix = f" · 끝 {_account_number[-4:]}" if _account_number else ""
+                    _label = f"{_account_name}{_suffix} · ID {_seq}"
+                    _account_options[_label] = _seq
+                if _account_options:
+                    _account_label = st.selectbox(
+                        "주문 계좌",
+                        list(_account_options),
+                        key="trade_account_s",
+                    )
+                    _account_seq = _account_options[_account_label]
+                else:
+                    st.error("주문 가능한 토스 계좌 식별 정보를 찾지 못했습니다.")
+            else:
+                st.error("토스 주문 계좌를 불러오지 못했습니다. API 설정을 확인하세요.")
             _qty = st.number_input("수량 (주)", min_value=1, step=1, value=1, key="trade_qty_s")
             _price = st.number_input("지정가 (원)", min_value=0, value=int(_px), step=10, key="trade_price_s")
             _est = _qty * _price
@@ -574,42 +616,73 @@ with st.container(border=True):
                                      step=1.0, format="%.4f", key="trade_price_c")
             _est = _qty * _price
 
+        _safe_account_label = escape_html(_account_label)
         st.markdown(
-            f"**{_side_kr}** · {_safe_name} · 수량 **{_qty:g}** · 지정가 **{_fmt_won(_price)}** "
+            f"**계좌** {_safe_account_label} · **{_side_kr}** · {_safe_name} · "
+            f"수량 **{_qty:g}** · 지정가 **{_fmt_won(_price)}** "
             f"→ 예상 금액 **{_est:,.0f}원** (수수료 별도)"
         )
         _min_order_ok = _kind != "coin" or _est >= 5000
+        _account_ok = _kind != "stock" or _account_seq is not None
         if not _min_order_ok and _est > 0:
             st.error("빗썸 최소 주문금액은 5,000원입니다.")
 
-        _order_payload = f"{_kind}|{_sym}|{_side_kr}|{_qty:.8f}|{_price:.8f}"
-        _order_sig = hashlib.sha256(_order_payload.encode("utf-8")).hexdigest()[:16]
+        _order_day = datetime.now(KST).date().isoformat()
+        _order_payload = (
+            f"{_order_day}|{_kind}|{_account_seq or 'bithumb'}|{_sym}|"
+            f"{_side_kr}|{_qty:.8f}|{_price:.8f}"
+        )
+        _order_sig = hashlib.sha256(_order_payload.encode("utf-8")).hexdigest()[:32]
         _unlocked = st.checkbox("🔓 이 주문의 거래 잠금 해제", value=False, key=f"trade_unlock_{_order_sig}")
         _confirm = st.checkbox("위 주문 내용을 확인했습니다", key=f"trade_confirm_{_order_sig}")
-        _already_submitted = st.session_state.get("last_submitted_order") == _order_sig
-        if _already_submitted:
-            st.info("동일한 주문 내용이 이미 접수되었습니다. 중복 주문 방지를 위해 다시 실행할 수 없습니다.")
-        _ready = _unlocked and _confirm and _est > 0 and _min_order_ok and not _already_submitted
+        _already_attempted = st.session_state.get("last_attempted_order") == _order_sig
+        if _already_attempted:
+            st.info(
+                "같은 날짜·계좌·종목·방향·수량·가격의 주문을 이미 전송했습니다. "
+                "접수·체결 상태를 증권사 또는 거래소 앱에서 확인하세요."
+            )
+        _ready = (
+            _unlocked
+            and _confirm
+            and _est > 0
+            and _min_order_ok
+            and _account_ok
+            and not _already_attempted
+        )
         if st.button("🚀 주문 실행", type="primary", disabled=not _ready, key="trade_go"):
+            st.session_state["last_attempted_order"] = _order_sig
             with st.spinner("주문 전송 중..."):
                 if _kind == "stock":
                     from toss_client import place_stock_order
                     _res = place_stock_order(
-                        _sym, "BUY" if _side_kr == "매수" else "SELL",
-                        int(_qty), _price, "LIMIT",
+                        _sym,
+                        "BUY" if _side_kr == "매수" else "SELL",
+                        int(_qty),
+                        _price,
+                        "LIMIT",
+                        account_seq=_account_seq,
+                        client_order_id=_order_sig,
                     )
                 else:
                     from bithumb_client import place_order
                     _res = place_order(
-                        _sym, "bid" if _side_kr == "매수" else "ask", "limit",
-                        volume=_qty, price=int(_price) if _price >= 1 else _price,
+                        _sym,
+                        "bid" if _side_kr == "매수" else "ask",
+                        "limit",
+                        volume=_qty,
+                        price=int(_price) if _price >= 1 else _price,
+                        identifier=_order_sig,
                     )
             if _res["ok"]:
-                st.session_state["last_submitted_order"] = _order_sig
-                st.success(f"✅ 주문 접수됨: {_res['data']}")
+                st.success(f"✅ 주문 접수 응답: {_res['data']}")
                 st.cache_data.clear()  # 자산·잔고 갱신
+            elif _res["status"] == 0:
+                st.warning(
+                    f"⚠️ 주문 결과를 확인할 수 없습니다: {_res['data']}\n\n"
+                    "네트워크 오류일 수 있으므로 재전송하지 말고 증권사·거래소 앱에서 접수 여부를 확인하세요."
+                )
             else:
-                st.error(f"❌ 주문 실패 (status {_res['status']}): {_res['data']}")
+                st.error(f"❌ 주문 거절 응답 (status {_res['status']}): {_res['data']}")
 
     if not _unlocked:
         st.caption("🔒 현재 거래 잠금 상태 — 검색·조회는 되지만 주문은 실행되지 않습니다.")

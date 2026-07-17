@@ -53,15 +53,23 @@ def get_realtime_price(symbol: str) -> float | None:
     return None
 
 
-def _account_seq(tok: str) -> int | None:
+def _accounts(tok: str) -> list[dict]:
     r = requests.get(
         f"{_BASE}/api/v1/accounts",
         headers={"Authorization": f"Bearer {tok}"},
         timeout=5,
     )
     r.raise_for_status()
-    res = r.json().get("result") or []
-    return res[0]["accountSeq"] if res else None
+    return r.json().get("result") or []
+
+
+def get_stock_accounts() -> list[dict]:
+    """사용자가 주문 계좌를 명시적으로 선택할 수 있도록 계좌 목록을 반환한다."""
+    try:
+        tok = _access_token()
+        return _accounts(tok) if tok else []
+    except Exception:
+        return []
 
 
 def get_stock_assets() -> dict | None:
@@ -70,7 +78,8 @@ def get_stock_assets() -> dict | None:
         tok = _access_token()
         if not tok:
             return None
-        seq = _account_seq(tok)
+        accounts = _accounts(tok)
+        seq = accounts[0].get("accountSeq") if accounts else None
         if seq is None:
             return None
         H = {"Authorization": f"Bearer {tok}", "X-Tossinvest-Account": str(seq)}
@@ -88,32 +97,47 @@ def get_stock_assets() -> dict | None:
         return None
 
 
-def place_stock_order(symbol: str, side: str, quantity: int,
-                      price: float | None = None, order_type: str = "LIMIT") -> dict:
-    """토스 주식 주문. side: BUY/SELL, order_type: LIMIT(가격필수)/MARKET.
-
-    반환: {"ok": bool, "status": int, "data": dict}
-    """
+def place_stock_order(
+    symbol: str,
+    side: str,
+    quantity: int,
+    price: float | None = None,
+    order_type: str = "LIMIT",
+    *,
+    account_seq: int | str | None = None,
+    client_order_id: str | None = None,
+) -> dict:
+    """명시적으로 선택한 토스 계좌에 주문을 전송한다."""
     try:
         tok = _access_token()
         if not tok:
             return {"ok": False, "status": 0, "data": {"error": "API 키 미설정"}}
-        seq = _account_seq(tok)
-        if seq is None:
-            return {"ok": False, "status": 0, "data": {"error": "계좌 없음"}}
-        H = {"Authorization": f"Bearer {tok}", "X-Tossinvest-Account": str(seq)}
-        body = {"symbol": symbol, "side": side, "orderType": order_type,
-                "quantity": str(int(quantity))}
+        if account_seq is None:
+            return {"ok": False, "status": 0, "data": {"error": "주문 계좌 선택 필요"}}
+        headers = {
+            "Authorization": f"Bearer {tok}",
+            "X-Tossinvest-Account": str(account_seq),
+        }
+        body = {
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type,
+            "quantity": str(int(quantity)),
+        }
+        if client_order_id:
+            body["clientOrderId"] = str(client_order_id)
         if order_type == "LIMIT":
             body["price"] = str(int(price))
-        r = requests.post(f"{_BASE}/api/v1/orders", json=body, headers=H, timeout=5)
+        response = requests.post(
+            f"{_BASE}/api/v1/orders", json=body, headers=headers, timeout=5
+        )
         try:
-            data = r.json()
+            data = response.json()
         except Exception:
-            data = {"error": r.text[:200]}
-        return {"ok": r.ok, "status": r.status_code, "data": data}
-    except Exception as e:
-        return {"ok": False, "status": 0, "data": {"error": str(e)}}
+            data = {"error": response.text[:200]}
+        return {"ok": response.ok, "status": response.status_code, "data": data}
+    except Exception as exc:
+        return {"ok": False, "status": 0, "data": {"error": str(exc)}}
 
 
 if __name__ == "__main__":

@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import logging
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+KST = ZoneInfo("Asia/Seoul")
 
 try:
     import FinanceDataReader as fdr
@@ -204,7 +206,7 @@ def _stage2_enrich(
         try:
             latest_bar = pd.Timestamp(df.index[-1])
             meta["수집일봉기준일"] = latest_bar.strftime("%Y-%m-%d")
-            now = datetime.now()
+            now = datetime.now(KST)
             meta["미완성봉가능"] = bool(
                 latest_bar.date() == now.date()
                 and now.weekday() < 5
